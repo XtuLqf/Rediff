@@ -121,9 +121,11 @@ def sampleTestSeen():
     return input_test_res, input_test_con, input_test_att
 
 def WeightedL14att(pred, gt):
-    wt = (pred - gt).pow(2)
-    wt /= wt.sum(1).sqrt().unsqueeze(1).expand(wt.size(0), wt.size(1))
-    loss = wt * (pred - gt).abs()
+    diff = pred - gt
+    wt = diff.pow(2)
+    norm = wt.sum(1).clamp_min(1e-12).sqrt().unsqueeze(1).expand_as(wt)
+    wt = wt / norm
+    loss = wt * diff.abs()
     return loss.sum() / loss.size(0)
 
 
@@ -131,7 +133,8 @@ def pairwise_distance_matrix(features, eps):
     squared_norm = features.pow(2).sum(dim=1, keepdim=True)
     distances = squared_norm + squared_norm.t() - 2 * features.mm(features.t())
     distances = distances.clamp_min(eps).sqrt()
-    distances.fill_diagonal_(0)
+    diagonal_mask = torch.eye(distances.size(0), dtype=torch.bool, device=distances.device)
+    distances = distances.masked_fill(diagonal_mask, 0.0)
     return distances
 
 
