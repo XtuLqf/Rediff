@@ -123,10 +123,44 @@ class DATA_LOADER(object):
         self.allclasses = torch.arange(0, self.nclass_seen + self.nclass_unseen).long()
         self.train_mapped_label = map_label(self.train_label, self.seenclasses)
         self.attribute_seen = self.attribute[self.seenclasses]
+        self.train_indices_by_class = {
+            int(class_id): torch.nonzero(self.train_label == class_id, as_tuple=False).view(-1)
+            for class_id in self.seenclasses.tolist()
+        }
 
     def next_seen_batch(self, batch_size):
 
         idx = torch.randperm(self.ntrain)[0:batch_size]
+        batch_feature = self.train_feature[idx]
+        batch_con = self.train_paco[idx]
+        batch_label = self.train_label[idx]
+        batch_att = self.attribute[batch_label]
+
+        return batch_feature, batch_con, batch_att, batch_label
+
+    def next_seen_episode_batch(self, n_way, k_shot):
+        if n_way <= 0 or k_shot <= 0:
+            raise ValueError("n_way and k_shot must be positive for episode sampling.")
+        if n_way > self.nclass_seen:
+            raise ValueError("n_way cannot exceed the number of seen classes.")
+
+        samples_per_class = 2 * k_shot
+        selected_classes = self.seenclasses[torch.randperm(self.nclass_seen)[:n_way]]
+
+        episode_indices = []
+        for class_id in selected_classes.tolist():
+            class_indices = self.train_indices_by_class[int(class_id)]
+            replace = class_indices.numel() < samples_per_class
+
+            if replace:
+                sample_positions = torch.randint(0, class_indices.numel(), (samples_per_class,))
+                sampled_indices = class_indices[sample_positions]
+            else:
+                sampled_indices = class_indices[torch.randperm(class_indices.numel())[:samples_per_class]]
+
+            episode_indices.append(sampled_indices)
+
+        idx = torch.cat(episode_indices, dim=0)
         batch_feature = self.train_feature[idx]
         batch_con = self.train_paco[idx]
         batch_label = self.train_label[idx]

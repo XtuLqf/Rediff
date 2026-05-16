@@ -40,11 +40,13 @@ command = [
 	'--gzsl', '--encoded_noise', '--manualSeed', '9182', '--preprocessing', '--cuda', '--image_embedding', 'res101',
 	'--class_embedding', 'att', '--class_embedding_norm', '--nepoch', '300', '--ngh', '4096', '--ndh', '4096', '--lambda1', '10', '--critic_iter', '5',
 	'--nclass_all', '50', '--dataroot', str(DATAROOT), '--dataset', 'AWA2', '--eval_interval', '5',
-	'--batch_size', '64', '--noiseSize', '85', '--attSize', '85', '--resSize', '2048',
+	'--batch_size', '24', '--noiseSize', '85', '--attSize', '85', '--resSize', '2048',
 	'--lr', '0.0005', '--classifier_lr', '0.001', '--gamma_recons', '1.0', '--freeze_dec', '--dec_lr', '0.0001',
 	'--gamma_ADV', '10', '--gamma_VAE', '1.0', '--embed_type', 'VA',
 	'--n_T', '4', '--dim_t', '85', '--gamma_x0', '1.0', '--gamma_xt', '1.0',
 	'--split_percent', '100', '--syn_num', '5400', '--gamma_dist', '5.0', '--factor_dist', '1.5',
+	'--gamma_rel', '1.0', '--rel_real_weight', '1.0', '--rel_sem_weight', '1.0',
+	'--rel_n_way', '3', '--rel_k_shot', '4',
 	'--netR_model_path', str(NETR_MODEL),
 ]
 

@@ -59,14 +59,26 @@ Firstly, download these datasets as well as the xlsa17 and our data splitting an
 
 ## Training
 
-To train and evaluate ZSL and GZSL models, please run the file `./scripts/train_awa2_zerodiff_DRG.py` then the scripts `./scripts/train_awa2_zerodiff_DFG`, e.g.:
-```
-python ./scripts/train_awa2_zerodiff_DRG.py
-```
-Then
-```
-python ./scripts/train_awa2_zerodiff_DFG.py
-```
+The released training flow is two-stage:
+
+1. Train DRG first
+2. Train DFG second for the same dataset
+
+Use the runnable entry scripts under `scripts/`:
+
+- `python ./scripts/run_awa2_zerodiff_DRG_train.py`
+- `python ./scripts/run_awa2_zerodiff_DFG_train.py`
+- `python ./scripts/run_cub_zerodiff_DRG_train.py`
+- `python ./scripts/run_cub_zerodiff_DFG_train.py`
+- `python ./scripts/run_sun_zerodiff_DRG_train.py`
+- `python ./scripts/run_sun_zerodiff_DFG_train.py`
+
+Dataset-specific semantic splits:
+
+- CUB uses `sent_splits.mat`
+- AWA2 and SUN use `att_splits.mat`
+
+The DFG run scripts in this repository now enable the initial REGZSL-style batch-sample relation transfer with an episode size of `3 x 2 x 4 = 24` samples per critic step.
 
 ## Results
 Following table shows the results of our released models using various evaluation protocols on three datasets, both in the ZSL and GZSL settings:

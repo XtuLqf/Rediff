@@ -2,7 +2,7 @@
 set -euo pipefail
 
 DATAROOT="./Dataset"
-CLASS_EMBEDDING="att"
+CLASS_EMBEDDING="auto"
 CHECK_SPLIT="false"
 
 usage() {
@@ -11,7 +11,7 @@ Usage: bash scripts/check_dataset_mats.sh [--dataroot PATH] [--class-embedding a
 
 Options:
   --dataroot PATH          Dataset root directory (default: ./Dataset)
-  --class-embedding TYPE   att only (default: att)
+  --class-embedding TYPE   auto|att|sent (default: auto)
   --check-split            Also require split_10percent.mat and split_30percent.mat
 EOF
 }
@@ -42,16 +42,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$CLASS_EMBEDDING" != "att" ]]; then
-  echo "Error: this project is fixed to att, use --class-embedding att." >&2
+if [[ "$CLASS_EMBEDDING" != "auto" && "$CLASS_EMBEDDING" != "att" && "$CLASS_EMBEDDING" != "sent" ]]; then
+  echo "Error: --class-embedding must be one of auto, att, or sent." >&2
   exit 2
 fi
 
 datasets=("AWA2" "CUB" "SUN")
-required=("res101.mat" "ce_ce.mat" "con_paco.mat" "${CLASS_EMBEDDING}_splits.mat")
-if [[ "$CHECK_SPLIT" == "true" ]]; then
-  required+=("split_10percent.mat" "split_30percent.mat")
-fi
 
 missing_any=0
 
@@ -69,6 +65,21 @@ for ds in "${datasets[@]}"; do
     missing_any=1
     echo
     continue
+  fi
+
+  if [[ "$CLASS_EMBEDDING" == "auto" ]]; then
+    if [[ "$ds" == "CUB" ]]; then
+      split_file="sent_splits.mat"
+    else
+      split_file="att_splits.mat"
+    fi
+  else
+    split_file="${CLASS_EMBEDDING}_splits.mat"
+  fi
+
+  required=("res101.mat" "ce_ce.mat" "con_paco.mat" "$split_file")
+  if [[ "$CHECK_SPLIT" == "true" ]]; then
+    required+=("split_10percent.mat" "split_30percent.mat")
   fi
 
   ds_missing=0

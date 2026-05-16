@@ -50,6 +50,13 @@ parser.add_argument("--temp_con", type=float, default=0.07)
 parser.add_argument("--gamma_CON_sample", type=float, default=0.0)
 parser.add_argument("--gamma_CON_step", type=float, default=0.0)
 parser.add_argument("--factor_dist", type=float, default=1.0)
+parser.add_argument("--gamma_rel", type=float, default=0.0)
+parser.add_argument("--rel_real_weight", type=float, default=1.0)
+parser.add_argument("--rel_sem_weight", type=float, default=1.0)
+parser.add_argument("--rel_eps", type=float, default=1e-12)
+parser.add_argument("--rel_n_way", type=int, default=0)
+parser.add_argument("--rel_k_shot", type=int, default=0)
+parser.add_argument('--rel_use_angle', action='store_true', default=False)
 ###
 parser.add_argument("--embed_type",  default='V', help='V/VA')
 parser.add_argument("--n_T", type=int, default=4)
@@ -73,4 +80,19 @@ opt.lambda2 = opt.lambda1
 opt.encoder_layer_sizes[0] = opt.resSize
 opt.decoder_layer_sizes[-1] = opt.resSize
 opt.latent_size = opt.attSize
+opt.rel_episode_size = 0
+
+if (opt.rel_n_way > 0) != (opt.rel_k_shot > 0):
+	raise ValueError("rel_n_way and rel_k_shot must be set together.")
+
+if opt.rel_n_way > 0 and opt.rel_k_shot > 0:
+	opt.rel_episode_size = opt.rel_n_way * 2 * opt.rel_k_shot
+
+if opt.gamma_rel > 0:
+	if opt.rel_episode_size <= 0:
+		raise ValueError("gamma_rel > 0 requires positive rel_n_way and rel_k_shot.")
+	if opt.batch_size != opt.rel_episode_size:
+		raise ValueError(
+			"batch_size must equal rel_n_way * 2 * rel_k_shot when gamma_rel > 0."
+		)
 

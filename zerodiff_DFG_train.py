@@ -35,13 +35,15 @@ os.makedirs(folder_name, exist_ok=True)
 os.makedirs(f"./log/{opt.dataset}", exist_ok=True)
 os.makedirs(f"./out/{opt.dataset}", exist_ok=True)
 
-logger_name = "./log/%s/train_zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_f:%.1f_num:%s" % (
+logger_name = "./log/%s/train_zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_rel:%.1f_way:%d_shot:%d_f:%.1f_num:%s" % (
     opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
-    str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.factor_dist, opt.syn_num)
+    str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.gamma_rel,
+    opt.rel_n_way, opt.rel_k_shot, opt.factor_dist, opt.syn_num)
 logger = Logger(logger_name)
-model_save_name = "./out/%s/zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_f:%.1f_num:%d" % (
+model_save_name = "./out/%s/zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_rel:%.1f_way:%d_shot:%d_f:%.1f_num:%d" % (
     opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
-    str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.factor_dist, opt.syn_num)
+    str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.gamma_rel,
+    opt.rel_n_way, opt.rel_k_shot, opt.factor_dist, opt.syn_num)
 
 
 if opt.manualSeed is None:
@@ -88,7 +90,10 @@ def loss_fn(recon_x, x, mean, log_var):
 
 
 def sample(batch_size):
-    batch_feature, batch_con, batch_att, batch_label = data.next_seen_batch(batch_size)
+    if opt.gamma_rel > 0:
+        batch_feature, batch_con, batch_att, batch_label = data.next_seen_episode_batch(opt.rel_n_way, opt.rel_k_shot)
+    else:
+        batch_feature, batch_con, batch_att, batch_label = data.next_seen_batch(batch_size)
     input_res.copy_(batch_feature)
     input_con.copy_(batch_con)
     input_att.copy_(batch_att)
@@ -120,6 +125,32 @@ def WeightedL14att(pred, gt):
     wt /= wt.sum(1).sqrt().unsqueeze(1).expand(wt.size(0), wt.size(1))
     loss = wt * (pred - gt).abs()
     return loss.sum() / loss.size(0)
+
+
+def pairwise_distance_matrix(features, eps):
+    squared_norm = features.pow(2).sum(dim=1, keepdim=True)
+    distances = squared_norm + squared_norm.t() - 2 * features.mm(features.t())
+    distances = distances.clamp_min(eps).sqrt()
+    distances.fill_diagonal_(0)
+    return distances
+
+
+def normalize_rkd_distances(distances, eps):
+    mask = ~torch.eye(distances.size(0), dtype=torch.bool, device=distances.device)
+    off_diagonal = distances[mask]
+    positive = off_diagonal[off_diagonal > 0]
+    mean_distance = positive.mean() if positive.numel() > 0 else distances.new_tensor(1.0)
+    return distances / mean_distance.clamp_min(eps), mask
+
+
+def rkd_distance_loss(student_features, teacher_features, eps):
+    student_distances = pairwise_distance_matrix(student_features, eps)
+    teacher_distances = pairwise_distance_matrix(teacher_features, eps)
+
+    student_distances, mask = normalize_rkd_distances(student_distances, eps)
+    teacher_distances, _ = normalize_rkd_distances(teacher_distances, eps)
+
+    return F.smooth_l1_loss(student_distances[mask], teacher_distances[mask].detach())
 
 def generate_syn_feature(zerodiff, classes, attribute, num, progressive=False):
     nclass = classes.size(0)
@@ -192,6 +223,10 @@ class ZERODIFF(torch.nn.Module):
         self.lambda1 = opt.lambda1
         self.gamma_dist = opt.gamma_dist
         self.factor_dist = opt.factor_dist
+        self.gamma_rel = opt.gamma_rel
+        self.rel_real_weight = opt.rel_real_weight
+        self.rel_sem_weight = opt.rel_sem_weight
+        self.rel_eps = opt.rel_eps
 
         self.loss_mse = torch.nn.MSELoss(reduce=False)
 
@@ -231,8 +266,8 @@ class ZERODIFF(torch.nn.Module):
             self.lambda1 *= 1.1
         elif gp_sum < 1.001:
             self.lambda1 /= 1.1
-        G_cost, vae_loss_seen = self.update_G(x_0_real, con_0_real, att_0_real, label)
-        return D_cost, Wasserstein_D, distill_loss, G_cost, vae_loss_seen
+        G_cost, vae_loss_seen, relation_loss = self.update_G(x_0_real, con_0_real, att_0_real, label)
+        return D_cost, Wasserstein_D, distill_loss, G_cost, vae_loss_seen, relation_loss
 
     def update_D(self, x_0_real, con_0_real, att_0_real, gp_sum, label):
         for p in self.netE.parameters():
@@ -378,13 +413,20 @@ class ZERODIFF(torch.nn.Module):
         R_cost = WeightedL14att(att_0_recons, att_0_real)
         errG += self.gamma_recons * R_cost
 
+        relation_loss = torch.tensor(0.0, device=self.device)
+        if self.gamma_rel > 0:
+            relation_loss_real = rkd_distance_loss(x_0_fake, x_0_real, self.rel_eps)
+            relation_loss_sem = rkd_distance_loss(x_0_fake, att_0_real, self.rel_eps)
+            relation_loss = self.rel_real_weight * relation_loss_real + self.rel_sem_weight * relation_loss_sem
+            errG += self.gamma_rel * relation_loss
+
         errG.backward()
         # write a condition here
         self.optimizerE.step()
         self.optimizerG.step()
         if self.gamma_recons > 0 and not opt.freeze_dec:  # not train decoder at feedback time
             self.optimizerDec.step()
-        return G_cost, vae_loss_seen
+        return G_cost, vae_loss_seen, relation_loss
 
     def sample_from_model(self, att, progressive=False):
         n_sample = att.shape[0]
@@ -504,18 +546,18 @@ best_acc_seen_list_VS, best_acc_unseen_list_VS, best_acc_zsl_list_VS = [], [], [
 best_acc_seen_list_VCS, best_acc_unseen_list_VCS, best_acc_zsl_list_VCS = [], [], []
 
 
-n_iter=data.ntrain//opt.batch_size
+n_iter = (data.ntrain + opt.batch_size - 1) // opt.batch_size
 for epoch in range(0, opt.nepoch):
     for i in range(0, data.ntrain, opt.batch_size):
-        D_cost, Wasserstein_D, distill_loss, G_cost, vae_loss_seen = zerodiff()
+        D_cost, Wasserstein_D, distill_loss, G_cost, vae_loss_seen, relation_loss = zerodiff()
 
     log_record = '[%d/%d] Loss_D: %.4f, Wasserstein_dist:%.4f, distill_loss:%.4f' % (
         epoch, opt.nepoch, D_cost.item(), Wasserstein_D.item(), distill_loss.item())
     print(log_record)
     logger.write(log_record + '\n')
 
-    log_record = '[%d/%d] Loss_G: %.4f, vae_loss_seen:%.4f' % (
-        epoch, opt.nepoch, G_cost.item(), vae_loss_seen.item())
+    log_record = '[%d/%d] Loss_G: %.4f, vae_loss_seen:%.4f, relation_loss:%.4f' % (
+        epoch, opt.nepoch, G_cost.item(), vae_loss_seen.item(), relation_loss.item())
     print(log_record)
     logger.write(log_record + '\n')
 
