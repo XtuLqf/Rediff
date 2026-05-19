@@ -78,7 +78,7 @@ Dataset-specific semantic splits:
 - CUB uses `sent_splits.mat`
 - AWA2 and SUN use `att_splits.mat`
 
-The DFG run scripts in this repository now enable the initial REGZSL-style batch-sample relation transfer with an episode size of `3 x 2 x 4 = 24` samples per critic step.
+The DFG run scripts in this repository now enable the REGZSL-style batch-sample relation transfer with an episode size of `3 x 2 x 4 = 24` samples per critic step, using both RKdDistance and RKdAngle under the ZeroDiff training structure.
 
 ## Results
 Following table shows the results of our released models using various evaluation protocols on three datasets, both in the ZSL and GZSL settings:

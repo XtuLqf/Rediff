@@ -56,6 +56,10 @@ parser.add_argument("--rel_sem_weight", type=float, default=1.0)
 parser.add_argument("--rel_eps", type=float, default=1e-12)
 parser.add_argument("--rel_n_way", type=int, default=0)
 parser.add_argument("--rel_k_shot", type=int, default=0)
+parser.add_argument("--rel_dist_ratio", type=float, default=1.0)
+parser.add_argument("--rel_angle_ratio", type=float, default=2.0)
+parser.add_argument("--rel_angle_max_samples", type=int, default=128)
+parser.add_argument("--rel_schedule_batch_size", type=int, default=64)
 parser.add_argument('--rel_use_angle', action='store_true', default=False)
 ###
 parser.add_argument("--embed_type",  default='V', help='V/VA')
@@ -95,4 +99,6 @@ if opt.gamma_rel > 0:
 		raise ValueError(
 			"batch_size must equal rel_n_way * 2 * rel_k_shot when gamma_rel > 0."
 		)
+	if opt.rel_schedule_batch_size <= 0:
+		raise ValueError("rel_schedule_batch_size must be positive when gamma_rel > 0.")
 

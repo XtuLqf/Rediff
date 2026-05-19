@@ -7,7 +7,7 @@ CHECK_SPLIT="false"
 
 usage() {
   cat <<'EOF'
-Usage: bash scripts/check_dataset_mats.sh [--dataroot PATH] [--class-embedding att] [--check-split]
+Usage: bash scripts/check_dataset_mats.sh [--dataroot PATH] [--class-embedding auto|att|sent] [--check-split]
 
 Options:
   --dataroot PATH          Dataset root directory (default: ./Dataset)
