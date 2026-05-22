@@ -53,6 +53,7 @@ parser.add_argument("--factor_dist", type=float, default=1.0)
 parser.add_argument("--gamma_rel", type=float, default=0.0)
 parser.add_argument("--rel_real_weight", type=float, default=1.0)
 parser.add_argument("--rel_sem_weight", type=float, default=1.0)
+parser.add_argument("--rel_con_weight", type=float, default=0.0)
 parser.add_argument("--rel_eps", type=float, default=1e-12)
 parser.add_argument("--rel_n_way", type=int, default=0)
 parser.add_argument("--rel_k_shot", type=int, default=0)
@@ -93,6 +94,10 @@ if opt.rel_n_way > 0 and opt.rel_k_shot > 0:
 	opt.rel_episode_size = opt.rel_n_way * 2 * opt.rel_k_shot
 
 if opt.gamma_rel > 0:
+	if min(opt.rel_real_weight, opt.rel_sem_weight, opt.rel_con_weight) < 0:
+		raise ValueError("relation teacher weights must be non-negative.")
+	if (opt.rel_real_weight + opt.rel_sem_weight + opt.rel_con_weight) <= 0:
+		raise ValueError("gamma_rel > 0 requires at least one positive relation teacher weight.")
 	if opt.rel_episode_size <= 0:
 		raise ValueError("gamma_rel > 0 requires positive rel_n_way and rel_k_shot.")
 	if opt.batch_size != opt.rel_episode_size:

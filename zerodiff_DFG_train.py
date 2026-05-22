@@ -35,17 +35,25 @@ os.makedirs(folder_name, exist_ok=True)
 os.makedirs(f"./log/{opt.dataset}", exist_ok=True)
 os.makedirs(f"./out/{opt.dataset}", exist_ok=True)
 
-logger_name = "./log/%s/train_zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_rel:%.1f_rd:%.1f_ra:%.1f_ang:%d_w:%d_s:%d_ref:%d_f:%.1f_num:%s" % (
+logger_name = "./log/%s/train_zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_rel:%.1f_rd:%.1f_ra:%.1f_ang:%d_w:%d_s:%d_ref:%d_f:%.1f_rc:%.1f_num:%s" % (
     opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
     str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.gamma_rel,
     opt.rel_dist_ratio, opt.rel_angle_ratio, int(opt.rel_use_angle), opt.rel_n_way, opt.rel_k_shot,
-    opt.rel_schedule_batch_size, opt.factor_dist, opt.syn_num)
+    opt.rel_schedule_batch_size, opt.factor_dist, opt.rel_con_weight, str(opt.syn_num))
 logger = Logger(logger_name)
-model_save_name = "./out/%s/zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_rel:%.1f_rd:%.1f_ra:%.1f_ang:%d_w:%d_s:%d_ref:%d_f:%.1f_num:%d" % (
+model_save_name = "./out/%s/zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_rel:%.1f_rd:%.1f_ra:%.1f_ang:%d_w:%d_s:%d_ref:%d_f:%.1f_rc:%.1f_num:%d" % (
     opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
     str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.gamma_rel,
     opt.rel_dist_ratio, opt.rel_angle_ratio, int(opt.rel_use_angle), opt.rel_n_way, opt.rel_k_shot,
-    opt.rel_schedule_batch_size, opt.factor_dist, opt.syn_num)
+    opt.rel_schedule_batch_size, opt.factor_dist, opt.rel_con_weight, opt.syn_num)
+
+logger.write(
+    "Relation teacher weights | real: %.2f sem: %.2f con: %.2f\n" % (
+        opt.rel_real_weight,
+        opt.rel_sem_weight,
+        opt.rel_con_weight,
+    )
+)
 
 
 if opt.manualSeed is None:
@@ -255,6 +263,7 @@ class ZERODIFF(torch.nn.Module):
         self.gamma_rel = opt.gamma_rel
         self.rel_real_weight = opt.rel_real_weight
         self.rel_sem_weight = opt.rel_sem_weight
+        self.rel_con_weight = opt.rel_con_weight
         self.rel_eps = opt.rel_eps
         self.rel_dist_ratio = opt.rel_dist_ratio
         self.rel_angle_ratio = opt.rel_angle_ratio
@@ -287,6 +296,42 @@ class ZERODIFF(torch.nn.Module):
         self.interval_recorder_sum['criticD_test_real_x0'] = 0.0
         self.interval_recorder_sum['criticD_test_real_xt'] = 0.0
         self.interval_recorder_sum['criticD_test_real_xc'] = 0.0
+
+    def get_relation_teacher_features(self, x_0_real, att_0_real, con_0_real):
+        teacher_features = []
+
+        if self.rel_real_weight > 0:
+            teacher_features.append((self.rel_real_weight, x_0_real.detach()))
+
+        if self.rel_sem_weight > 0:
+            teacher_features.append((self.rel_sem_weight, att_0_real.detach()))
+
+        if self.rel_con_weight > 0:
+            with torch.no_grad():
+                con_teacher = self.netD_xc.con_emb_layers(con_0_real)
+            teacher_features.append((self.rel_con_weight, con_teacher.detach()))
+
+        return teacher_features
+
+    def compute_relation_losses(self, x_0_fake, x_0_real, att_0_real, con_0_real):
+        relation_distance_loss = torch.tensor(0.0, device=self.device)
+        relation_angle_loss = torch.tensor(0.0, device=self.device)
+
+        for teacher_weight, teacher_features in self.get_relation_teacher_features(x_0_real, att_0_real, con_0_real):
+            relation_distance_loss += teacher_weight * rkd_distance_loss(x_0_fake, teacher_features, self.rel_eps)
+            if self.rel_use_angle:
+                relation_angle_loss += teacher_weight * rkd_angle_loss(
+                    x_0_fake,
+                    teacher_features,
+                    self.rel_eps,
+                    self.rel_angle_max_samples,
+                )
+
+        relation_distance_loss = self.rel_dist_ratio * relation_distance_loss
+        relation_angle_loss = self.rel_angle_ratio * relation_angle_loss
+        relation_loss = relation_distance_loss + relation_angle_loss
+
+        return relation_distance_loss, relation_angle_loss, relation_loss
 
     def forward(self):
         gp_sum = 0  # lAMBDA VARIABLE
@@ -450,20 +495,12 @@ class ZERODIFF(torch.nn.Module):
         relation_angle_loss = torch.tensor(0.0, device=self.device)
         relation_loss = torch.tensor(0.0, device=self.device)
         if self.gamma_rel > 0:
-            relation_distance_real = rkd_distance_loss(x_0_fake, x_0_real, self.rel_eps)
-            relation_distance_sem = rkd_distance_loss(x_0_fake, att_0_real, self.rel_eps)
-            relation_distance_loss = self.rel_dist_ratio * (
-                self.rel_real_weight * relation_distance_real + self.rel_sem_weight * relation_distance_sem
+            relation_distance_loss, relation_angle_loss, relation_loss = self.compute_relation_losses(
+                x_0_fake,
+                x_0_real,
+                att_0_real,
+                con_0_real,
             )
-
-            if self.rel_use_angle:
-                relation_angle_real = rkd_angle_loss(x_0_fake, x_0_real, self.rel_eps, self.rel_angle_max_samples)
-                relation_angle_sem = rkd_angle_loss(x_0_fake, att_0_real, self.rel_eps, self.rel_angle_max_samples)
-                relation_angle_loss = self.rel_angle_ratio * (
-                    self.rel_real_weight * relation_angle_real + self.rel_sem_weight * relation_angle_sem
-                )
-
-            relation_loss = relation_distance_loss + relation_angle_loss
             errG += self.gamma_rel * relation_loss
 
         errG.backward()
