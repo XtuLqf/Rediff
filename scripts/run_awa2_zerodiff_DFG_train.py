@@ -47,7 +47,7 @@ command = [
 	'--split_percent', '100', '--syn_num', '5400', '--gamma_dist', '5.0', '--factor_dist', '1.5',
 	'--gamma_rel', '1.0', '--rel_real_weight', '1.0', '--rel_sem_weight', '1.0',
 	'--rel_n_way', '3', '--rel_k_shot', '4', '--rel_dist_ratio', '1.0', '--rel_angle_ratio', '2.0',
-	'--rel_angle_max_samples', '128', '--rel_schedule_batch_size', '64', '--rel_use_angle',
+	'--rel_angle_max_samples', '128', '--rel_schedule_batch_size', '64', '--rel_proj_dim', '512', '--rel_use_angle',
 	'--netR_model_path', str(NETR_MODEL),
 ]
 

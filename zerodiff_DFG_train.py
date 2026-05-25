@@ -35,23 +35,24 @@ os.makedirs(folder_name, exist_ok=True)
 os.makedirs(f"./log/{opt.dataset}", exist_ok=True)
 os.makedirs(f"./out/{opt.dataset}", exist_ok=True)
 
-logger_name = "./log/%s/train_zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_rel:%.1f_rd:%.1f_ra:%.1f_ang:%d_w:%d_s:%d_ref:%d_f:%.1f_rc:%.1f_num:%s" % (
+logger_name = "./log/%s/train_zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_rel:%.1f_rd:%.1f_ra:%.1f_ang:%d_w:%d_s:%d_ref:%d_f:%.1f_rc:%.1f_rp:%d_num:%s" % (
     opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
     str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.gamma_rel,
     opt.rel_dist_ratio, opt.rel_angle_ratio, int(opt.rel_use_angle), opt.rel_n_way, opt.rel_k_shot,
-    opt.rel_schedule_batch_size, opt.factor_dist, opt.rel_con_weight, str(opt.syn_num))
+    opt.rel_schedule_batch_size, opt.factor_dist, opt.rel_con_weight, opt.rel_proj_dim, str(opt.syn_num))
 logger = Logger(logger_name)
-model_save_name = "./out/%s/zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_rel:%.1f_rd:%.1f_ra:%.1f_ang:%d_w:%d_s:%d_ref:%d_f:%.1f_rc:%.1f_num:%d" % (
+model_save_name = "./out/%s/zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_rel:%.1f_rd:%.1f_ra:%.1f_ang:%d_w:%d_s:%d_ref:%d_f:%.1f_rc:%.1f_rp:%d_num:%d" % (
     opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
     str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.gamma_rel,
     opt.rel_dist_ratio, opt.rel_angle_ratio, int(opt.rel_use_angle), opt.rel_n_way, opt.rel_k_shot,
-    opt.rel_schedule_batch_size, opt.factor_dist, opt.rel_con_weight, opt.syn_num)
+    opt.rel_schedule_batch_size, opt.factor_dist, opt.rel_con_weight, opt.rel_proj_dim, opt.syn_num)
 
 logger.write(
-    "Relation teacher weights | real: %.2f sem: %.2f con: %.2f\n" % (
+    "VSRA teacher weights | real: %.2f sem: %.2f con: %.2f | proj_dim: %d\n" % (
         opt.rel_real_weight,
         opt.rel_sem_weight,
         opt.rel_con_weight,
+        opt.rel_proj_dim,
     )
 )
 
@@ -216,6 +217,7 @@ def generate_syn_feature(zerodiff, classes, attribute, num, progressive=False):
 def save_zerodiff(zerodiff, save_name, post):
     torch.save({'state_dict_G': zerodiff.netG.state_dict(),
                 'state_dict_Dec': zerodiff.netDec.state_dict(),
+                'state_dict_RelProj': zerodiff.netRelProj.state_dict(),
                 'state_dict_D_x0': zerodiff.netD_x0.state_dict(),
                 'state_dict_D_xt': zerodiff.netD_xt.state_dict(),
                 'state_dict_D_xc': zerodiff.netD_xc.state_dict(),
@@ -244,10 +246,12 @@ class ZERODIFF(torch.nn.Module):
         self.netD_xt = zerodiff_tools.DFG_Discriminator_xt(opt).to(self.device)
         self.netD_xc = zerodiff_tools.DFG_Discriminator_xc(opt).to(self.device)
         self.netDec = zerodiff_tools.V2S_mapping(opt, opt.attSize).to(self.device)
+        self.netRelProj = zerodiff_tools.RelationProjector(opt.resSize, opt.rel_proj_dim).to(self.device)
 
         self.optimizerE = optim.Adam(self.netE.parameters(), lr=opt.lr)
         self.optimizerG = optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
         self.optimizerDec = optim.Adam(self.netDec.parameters(), lr=opt.dec_lr, betas=(opt.beta1, 0.999))
+        self.optimizerRelProj = optim.Adam(self.netRelProj.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
         self.optimizerD_x0 = optim.Adam(self.netD_x0.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
         self.optimizerD_xt = optim.Adam(self.netD_xt.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
         self.optimizerD_xc = optim.Adam(self.netD_xc.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
@@ -268,6 +272,7 @@ class ZERODIFF(torch.nn.Module):
         self.rel_dist_ratio = opt.rel_dist_ratio
         self.rel_angle_ratio = opt.rel_angle_ratio
         self.rel_angle_max_samples = opt.rel_angle_max_samples
+        self.rel_proj_dim = opt.rel_proj_dim
         self.rel_use_angle = opt.rel_use_angle
 
         self.loss_mse = torch.nn.MSELoss(reduce=False)
@@ -297,11 +302,13 @@ class ZERODIFF(torch.nn.Module):
         self.interval_recorder_sum['criticD_test_real_xt'] = 0.0
         self.interval_recorder_sum['criticD_test_real_xc'] = 0.0
 
-    def get_relation_teacher_features(self, x_0_real, att_0_real, con_0_real):
+    def get_vsra_teacher_features(self, x_0_real, att_0_real, con_0_real):
         teacher_features = []
 
         if self.rel_real_weight > 0:
-            teacher_features.append((self.rel_real_weight, x_0_real.detach()))
+            with torch.no_grad():
+                q_0_real = self.netRelProj(x_0_real)
+            teacher_features.append((self.rel_real_weight, q_0_real.detach()))
 
         if self.rel_sem_weight > 0:
             teacher_features.append((self.rel_sem_weight, att_0_real.detach()))
@@ -313,25 +320,25 @@ class ZERODIFF(torch.nn.Module):
 
         return teacher_features
 
-    def compute_relation_losses(self, x_0_fake, x_0_real, att_0_real, con_0_real):
-        relation_distance_loss = torch.tensor(0.0, device=self.device)
-        relation_angle_loss = torch.tensor(0.0, device=self.device)
+    def compute_vsra_losses(self, q_0_fake, x_0_real, att_0_real, con_0_real):
+        vsra_distance_loss = torch.tensor(0.0, device=self.device)
+        vsra_angle_loss = torch.tensor(0.0, device=self.device)
 
-        for teacher_weight, teacher_features in self.get_relation_teacher_features(x_0_real, att_0_real, con_0_real):
-            relation_distance_loss += teacher_weight * rkd_distance_loss(x_0_fake, teacher_features, self.rel_eps)
+        for teacher_weight, teacher_features in self.get_vsra_teacher_features(x_0_real, att_0_real, con_0_real):
+            vsra_distance_loss += teacher_weight * rkd_distance_loss(q_0_fake, teacher_features, self.rel_eps)
             if self.rel_use_angle:
-                relation_angle_loss += teacher_weight * rkd_angle_loss(
-                    x_0_fake,
+                vsra_angle_loss += teacher_weight * rkd_angle_loss(
+                    q_0_fake,
                     teacher_features,
                     self.rel_eps,
                     self.rel_angle_max_samples,
                 )
 
-        relation_distance_loss = self.rel_dist_ratio * relation_distance_loss
-        relation_angle_loss = self.rel_angle_ratio * relation_angle_loss
-        relation_loss = relation_distance_loss + relation_angle_loss
+        vsra_distance_loss = self.rel_dist_ratio * vsra_distance_loss
+        vsra_angle_loss = self.rel_angle_ratio * vsra_angle_loss
+        vsra_loss = vsra_distance_loss + vsra_angle_loss
 
-        return relation_distance_loss, relation_angle_loss, relation_loss
+        return vsra_distance_loss, vsra_angle_loss, vsra_loss
 
     def forward(self):
         gp_sum = 0  # lAMBDA VARIABLE
@@ -344,13 +351,15 @@ class ZERODIFF(torch.nn.Module):
             self.lambda1 *= 1.1
         elif gp_sum < 1.001:
             self.lambda1 /= 1.1
-        G_cost, vae_loss_seen, relation_distance_loss, relation_angle_loss, relation_loss = self.update_G(x_0_real, con_0_real, att_0_real, label)
-        return D_cost, Wasserstein_D, distill_loss, G_cost, vae_loss_seen, relation_distance_loss, relation_angle_loss, relation_loss
+        G_cost, vae_loss_seen, vsra_distance_loss, vsra_angle_loss, vsra_loss = self.update_G(x_0_real, con_0_real, att_0_real, label)
+        return D_cost, Wasserstein_D, distill_loss, G_cost, vae_loss_seen, vsra_distance_loss, vsra_angle_loss, vsra_loss
 
     def update_D(self, x_0_real, con_0_real, att_0_real, gp_sum, label):
         for p in self.netE.parameters():
             p.requires_grad = False
         for p in self.netG.parameters():
+            p.requires_grad = False
+        for p in self.netRelProj.parameters():
             p.requires_grad = False
         for p in self.netD_x0.parameters():
             p.requires_grad = True
@@ -454,6 +463,8 @@ class ZERODIFF(torch.nn.Module):
             p.requires_grad = True
         for p in self.netG.parameters():
             p.requires_grad = True
+        for p in self.netRelProj.parameters():
+            p.requires_grad = True
         for p in self.netD_x0.parameters():  # freeze discrimator
             p.requires_grad = False
         for p in self.netD_xt.parameters():
@@ -466,6 +477,7 @@ class ZERODIFF(torch.nn.Module):
 
         self.netE.zero_grad()
         self.netG.zero_grad()
+        self.netRelProj.zero_grad()
 
         z, means, log_var = self.netE(x_0_real, att_0_real)
 
@@ -491,25 +503,27 @@ class ZERODIFF(torch.nn.Module):
         R_cost = WeightedL14att(att_0_recons, att_0_real)
         errG += self.gamma_recons * R_cost
 
-        relation_distance_loss = torch.tensor(0.0, device=self.device)
-        relation_angle_loss = torch.tensor(0.0, device=self.device)
-        relation_loss = torch.tensor(0.0, device=self.device)
+        vsra_distance_loss = torch.tensor(0.0, device=self.device)
+        vsra_angle_loss = torch.tensor(0.0, device=self.device)
+        vsra_loss = torch.tensor(0.0, device=self.device)
         if self.gamma_rel > 0:
-            relation_distance_loss, relation_angle_loss, relation_loss = self.compute_relation_losses(
-                x_0_fake,
+            q_0_fake = self.netRelProj(x_0_fake)
+            vsra_distance_loss, vsra_angle_loss, vsra_loss = self.compute_vsra_losses(
+                q_0_fake,
                 x_0_real,
                 att_0_real,
                 con_0_real,
             )
-            errG += self.gamma_rel * relation_loss
+            errG += self.gamma_rel * vsra_loss
 
         errG.backward()
         # write a condition here
         self.optimizerE.step()
         self.optimizerG.step()
+        self.optimizerRelProj.step()
         if self.gamma_recons > 0 and not opt.freeze_dec:  # not train decoder at feedback time
             self.optimizerDec.step()
-        return G_cost, vae_loss_seen, relation_distance_loss, relation_angle_loss, relation_loss
+        return G_cost, vae_loss_seen, vsra_distance_loss, vsra_angle_loss, vsra_loss
 
     def sample_from_model(self, att, progressive=False):
         n_sample = att.shape[0]
@@ -632,15 +646,15 @@ best_acc_seen_list_VCS, best_acc_unseen_list_VCS, best_acc_zsl_list_VCS = [], []
 n_iter = get_train_steps_per_epoch(data)
 for epoch in range(0, opt.nepoch):
     for _ in range(n_iter):
-        D_cost, Wasserstein_D, distill_loss, G_cost, vae_loss_seen, relation_distance_loss, relation_angle_loss, relation_loss = zerodiff()
+        D_cost, Wasserstein_D, distill_loss, G_cost, vae_loss_seen, vsra_distance_loss, vsra_angle_loss, vsra_loss = zerodiff()
 
     log_record = '[%d/%d] Loss_D: %.4f, Wasserstein_dist:%.4f, distill_loss:%.4f' % (
         epoch, opt.nepoch, D_cost.item(), Wasserstein_D.item(), distill_loss.item())
     print(log_record)
     logger.write(log_record + '\n')
 
-    log_record = '[%d/%d] Loss_G: %.4f, vae_loss_seen:%.4f, relation_distance_loss:%.4f, relation_angle_loss:%.4f, relation_loss:%.4f' % (
-        epoch, opt.nepoch, G_cost.item(), vae_loss_seen.item(), relation_distance_loss.item(), relation_angle_loss.item(), relation_loss.item())
+    log_record = '[%d/%d] Loss_G: %.4f, vae_loss_seen:%.4f, vsra_distance_loss:%.4f, vsra_angle_loss:%.4f, vsra_loss:%.4f' % (
+        epoch, opt.nepoch, G_cost.item(), vae_loss_seen.item(), vsra_distance_loss.item(), vsra_angle_loss.item(), vsra_loss.item())
     print(log_record)
     logger.write(log_record + '\n')
 

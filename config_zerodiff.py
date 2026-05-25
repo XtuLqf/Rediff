@@ -61,6 +61,7 @@ parser.add_argument("--rel_dist_ratio", type=float, default=1.0)
 parser.add_argument("--rel_angle_ratio", type=float, default=2.0)
 parser.add_argument("--rel_angle_max_samples", type=int, default=128)
 parser.add_argument("--rel_schedule_batch_size", type=int, default=64)
+parser.add_argument("--rel_proj_dim", type=int, default=512)
 parser.add_argument('--rel_use_angle', action='store_true', default=False)
 ###
 parser.add_argument("--embed_type",  default='V', help='V/VA')
@@ -100,6 +101,8 @@ if opt.gamma_rel > 0:
 		raise ValueError("gamma_rel > 0 requires at least one positive relation teacher weight.")
 	if opt.rel_episode_size <= 0:
 		raise ValueError("gamma_rel > 0 requires positive rel_n_way and rel_k_shot.")
+	if opt.rel_proj_dim <= 0:
+		raise ValueError("gamma_rel > 0 requires a positive rel_proj_dim.")
 	if opt.batch_size != opt.rel_episode_size:
 		raise ValueError(
 			"batch_size must equal rel_n_way * 2 * rel_k_shot when gamma_rel > 0."

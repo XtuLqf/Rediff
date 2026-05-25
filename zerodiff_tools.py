@@ -94,6 +94,16 @@ class TimeEmbedFC(nn.Module):
         x = x.view(-1, self.input_dim)
         return self.model(x)
 
+
+class RelationProjector(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super(RelationProjector, self).__init__()
+        self.fc = nn.Linear(input_dim, output_dim)
+        self.apply(weights_init)
+
+    def forward(self, x):
+        return self.fc(x)
+
 # Decoder/Generator
 class DRG_Generator(nn.Module):
     # for AWA and CUB
