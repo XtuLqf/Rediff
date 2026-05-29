@@ -94,6 +94,22 @@ class TimeEmbedFC(nn.Module):
         x = x.view(-1, self.input_dim)
         return self.model(x)
 
+
+class RelationProjector(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super(RelationProjector, self).__init__()
+        hidden_dim = max(output_dim, input_dim // 2)
+        self.model = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.LeakyReLU(0.2, True),
+            nn.Linear(hidden_dim, output_dim),
+        )
+        self.apply(weights_init)
+
+    def forward(self, x):
+        embedding = self.model(x)
+        return F.normalize(embedding, p=2, dim=1)
+
 # Decoder/Generator
 class DRG_Generator(nn.Module):
     # for AWA and CUB

@@ -44,6 +44,8 @@ command = [
 	'--gamma_ADV', '10', '--gamma_VAE', '1.0', '--embed_type', 'VA',
 	'--n_T', '4', '--dim_t', '1024', '--gamma_x0', '1.0', '--gamma_xt', '1.0',
 	'--gamma_dist', '2.0', '--factor_dist', '1.5',
+	'--gamma_rel', '1.0', '--rel_sem_weight', '1.0', '--rel_con_weight', '1.0', '--rel_proj_dim', '512',
+	'--rel_dist_ratio', '1.0', '--rel_angle_ratio', '2.0', '--rel_angle_max_samples', '128', '--rel_use_angle',
 	'--split_percent', '100', '--syn_num', '1440',
 	'--netR_model_path', str(NETR_MODEL),
 ]

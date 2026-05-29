@@ -68,6 +68,8 @@ Then
 python ./scripts/train_awa2_zerodiff_DFG.py
 ```
 
+Current DFG scripts in this repository also enable a REGZSL-inspired relation transfer stage during the generator phase. The generator still produces visual features from semantic attributes and contrastive conditions, while a dedicated relation embedding head is first updated on real visual features and then reused to constrain fake features with semantic (`S`) and contrastive (`C`) teachers. The current implementation intentionally removes the extra real-visual teacher; real visual features now participate by defining the relation space itself. The contrastive teacher is still taken from the existing discriminator-side embedding path for now, so it is not yet a fully independent teacher encoder.
+
 ## Results
 Following table shows the results of our released models using various evaluation protocols on three datasets, both in the ZSL and GZSL settings:
 

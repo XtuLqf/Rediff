@@ -50,6 +50,15 @@ parser.add_argument("--temp_con", type=float, default=0.07)
 parser.add_argument("--gamma_CON_sample", type=float, default=0.0)
 parser.add_argument("--gamma_CON_step", type=float, default=0.0)
 parser.add_argument("--factor_dist", type=float, default=1.0)
+parser.add_argument("--gamma_rel", type=float, default=0.0)
+parser.add_argument("--rel_proj_dim", type=int, default=512)
+parser.add_argument("--rel_sem_weight", type=float, default=1.0)
+parser.add_argument("--rel_con_weight", type=float, default=1.0)
+parser.add_argument("--rel_eps", type=float, default=1e-12)
+parser.add_argument("--rel_dist_ratio", type=float, default=1.0)
+parser.add_argument("--rel_angle_ratio", type=float, default=2.0)
+parser.add_argument("--rel_angle_max_samples", type=int, default=128)
+parser.add_argument('--rel_use_angle', action='store_true', default=False)
 ###
 parser.add_argument("--embed_type",  default='V', help='V/VA')
 parser.add_argument("--n_T", type=int, default=4)
@@ -73,4 +82,12 @@ opt.lambda2 = opt.lambda1
 opt.encoder_layer_sizes[0] = opt.resSize
 opt.decoder_layer_sizes[-1] = opt.resSize
 opt.latent_size = opt.attSize
+
+if opt.gamma_rel > 0:
+	if opt.rel_proj_dim <= 0:
+		raise ValueError("gamma_rel > 0 requires a positive rel_proj_dim.")
+	if min(opt.rel_sem_weight, opt.rel_con_weight) < 0:
+		raise ValueError("relation teacher weights must be non-negative.")
+	if (opt.rel_sem_weight + opt.rel_con_weight) <= 0:
+		raise ValueError("gamma_rel > 0 requires at least one positive S/C teacher weight.")
 
