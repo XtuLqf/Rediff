@@ -68,7 +68,9 @@ Then
 python ./scripts/train_awa2_zerodiff_DFG.py
 ```
 
-Current DFG scripts in this repository also enable a REGZSL-inspired relation transfer stage during the generator phase. The generator still produces visual features from semantic attributes and contrastive conditions, while a dedicated relation embedding head is first updated on real visual features and then reused to constrain fake features with semantic (`S`) and contrastive (`C`) teachers. The current implementation intentionally removes the extra real-visual teacher; real visual features now participate by defining the relation space itself. The contrastive teacher now reuses the frozen DRG generator to produce an instance-level semantic carrier `r_0_teacher`, and then maps it through an independent `C`-teacher embedder before applying RKD.
+If you want to continue training from a saved DFG checkpoint, pass `--netG_model_path <path_to_dfg_checkpoint.tar>` when launching `zerodiff_DFG_train.py`. The same checkpoint can also be loaded through `--model_path` as a compatibility alias.
+
+Current DFG scripts in this repository also enable a REGZSL-inspired relation transfer stage during the generator phase. The generator still produces visual features from semantic attributes and contrastive conditions, while a dedicated relation embedding head is first updated on real visual features and then reused to constrain fake features with semantic (`S`) and contrastive (`C`) teachers. The current implementation intentionally removes the extra real-visual teacher; real visual features now participate by defining the relation space itself. During training, the contrastive teacher is linked to the current batch by running the frozen DRG generator on a noised version of the real contrastive feature and then mapping the resulting `r_0_teacher` through an independent `C`-teacher embedder before applying RKD. During sampling, DFG still uses DRG-generated fake `C` as its generation condition.
 
 ## Results
 Following table shows the results of our released models using various evaluation protocols on three datasets, both in the ZSL and GZSL settings:

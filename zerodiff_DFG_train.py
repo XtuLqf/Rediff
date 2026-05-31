@@ -74,7 +74,6 @@ input_res = torch.FloatTensor(opt.batch_size, opt.resSize)
 input_con = torch.FloatTensor(opt.batch_size, 2048)
 input_att = torch.FloatTensor(opt.batch_size, opt.attSize)  # attSize class-embedding size
 input_label = torch.LongTensor(opt.batch_size)  # attSize class-embedding size
-noise = torch.FloatTensor(opt.batch_size, opt.noiseSize)
 input_test_res = torch.FloatTensor(opt.batch_size, opt.resSize)
 input_test_con = torch.FloatTensor(opt.batch_size, opt.resSize)
 input_test_att = torch.FloatTensor(opt.batch_size, opt.attSize)
@@ -82,7 +81,7 @@ input_test_att = torch.FloatTensor(opt.batch_size, opt.attSize)
 # Cuda
 if opt.cuda:
     input_res = input_res.cuda()
-    noise, input_att = noise.cuda(), input_att.cuda()
+    input_att = input_att.cuda()
     input_label = input_label.cuda()
     input_con = input_con.cuda()
     input_test_res, input_test_con, input_test_att = input_test_res.cuda(), input_test_con.cuda(), input_test_att.cuda()
@@ -104,18 +103,6 @@ def sample(batch_size):
     input_att.copy_(batch_att)
     input_label.copy_(batch_label)
     return input_res, input_con, input_att, input_label
-
-def sample_con(batch_size):
-    idx = torch.randperm(data.ntrain)[0:batch_size]
-    batch_feature = data.train_feature[idx]
-    batch_label = data.train_label[idx]
-    batch_att = data.attribute[batch_label]
-
-    input_res.copy_(batch_feature)
-    input_att.copy_(batch_att)
-    input_label.copy_(batch_label)
-
-    return input_res, input_att, input_label
 
 def sampleTestSeen():
     batch_feature, batch_con, batch_att, _ = data.next_test_seen_batch(opt.batch_size)
@@ -206,14 +193,258 @@ def generate_syn_feature(zerodiff, classes, attribute, num, progressive=False):
 
 
 def save_zerodiff(zerodiff, save_name, post):
-    torch.save({'state_dict_G': zerodiff.netG.state_dict(),
+    torch.save({'state_dict_E': zerodiff.netE.state_dict(),
+                'state_dict_G': zerodiff.netG.state_dict(),
                 'state_dict_Dec': zerodiff.netDec.state_dict(),
                 'state_dict_RelProj': zerodiff.netRelProj.state_dict(),
                 'state_dict_CTeacherEmbed': zerodiff.netCTeacherEmbed.state_dict(),
                 'state_dict_D_x0': zerodiff.netD_x0.state_dict(),
                 'state_dict_D_xt': zerodiff.netD_xt.state_dict(),
                 'state_dict_D_xc': zerodiff.netD_xc.state_dict(),
+                'optimizer_E': zerodiff.optimizerE.state_dict(),
+                'optimizer_G': zerodiff.optimizerG.state_dict(),
+                'optimizer_Dec': zerodiff.optimizerDec.state_dict(),
+                'optimizer_RelProj': zerodiff.optimizerRelProj.state_dict(),
+                'optimizer_CTeacherEmbed': zerodiff.optimizerCTeacherEmbed.state_dict(),
+                'optimizer_D_x0': zerodiff.optimizerD_x0.state_dict(),
+                'optimizer_D_xt': zerodiff.optimizerD_xt.state_dict(),
+                'optimizer_D_xc': zerodiff.optimizerD_xc.state_dict(),
+                'lambda1': zerodiff.lambda1,
                 }, save_name + post + '.tar')
+
+
+def load_zerodiff(zerodiff, checkpoint_path, load_optimizers=True):
+    checkpoint = torch.load(checkpoint_path, map_location=zerodiff.device)
+
+    encoder_state = checkpoint.get('state_dict_E')
+    if encoder_state is not None:
+        zerodiff.netE.load_state_dict(encoder_state)
+
+    zerodiff.netG.load_state_dict(checkpoint['state_dict_G'])
+    zerodiff.netDec.load_state_dict(checkpoint['state_dict_Dec'])
+    zerodiff.netD_x0.load_state_dict(checkpoint['state_dict_D_x0'])
+    zerodiff.netD_xt.load_state_dict(checkpoint['state_dict_D_xt'])
+    zerodiff.netD_xc.load_state_dict(checkpoint['state_dict_D_xc'])
+
+    rel_proj_state = checkpoint.get('state_dict_RelProj')
+    if rel_proj_state is not None:
+        zerodiff.netRelProj.load_state_dict(rel_proj_state)
+
+    c_teacher_state = checkpoint.get('state_dict_CTeacherEmbed')
+    if c_teacher_state is not None:
+        zerodiff.netCTeacherEmbed.load_state_dict(c_teacher_state)
+
+    if load_optimizers:
+        optimizer_pairs = (
+            ('optimizer_E', zerodiff.optimizerE),
+            ('optimizer_G', zerodiff.optimizerG),
+            ('optimizer_Dec', zerodiff.optimizerDec),
+            ('optimizer_RelProj', zerodiff.optimizerRelProj),
+            ('optimizer_CTeacherEmbed', zerodiff.optimizerCTeacherEmbed),
+            ('optimizer_D_x0', zerodiff.optimizerD_x0),
+            ('optimizer_D_xt', zerodiff.optimizerD_xt),
+            ('optimizer_D_xc', zerodiff.optimizerD_xc),
+        )
+        for key, optimizer in optimizer_pairs:
+            state = checkpoint.get(key)
+            if state is not None:
+                optimizer.load_state_dict(state)
+
+    lambda1 = checkpoint.get('lambda1')
+    if lambda1 is not None:
+        zerodiff.lambda1 = lambda1
+
+    return checkpoint
+
+
+MODALITY_ORDER = ("V", "VS", "C", "VC", "VCS")
+
+
+def log_message(message):
+    print(message)
+    logger.write(message + '\n')
+
+
+def as_scalar(value):
+    return value.item() if torch.is_tensor(value) else value
+
+
+def init_best_eval_state():
+    return {
+        modality: {
+            'gzsl': {
+                'seen': 0.0,
+                'unseen': 0.0,
+                'H': 0.0,
+                'seen_list': [],
+                'unseen_list': [],
+            },
+            'zsl': {
+                'acc': 0.0,
+                'acc_list': [],
+            },
+        }
+        for modality in MODALITY_ORDER
+    }
+
+
+def get_eval_modality_configs(zerodiff):
+    decoder_kwargs = {
+        'netDec': zerodiff.netDec,
+        'dec_size': opt.attSize,
+        'dec_hidden_size': 4096,
+    }
+    return {
+        'V': {
+            'classifier_kwargs': {},
+            'gzsl_postfixes': ('gzsl_V',),
+            'zsl_postfixes': ('zsl_V',),
+        },
+        'VS': {
+            'classifier_kwargs': {
+                **decoder_kwargs,
+                'useS': True,
+            },
+            'gzsl_postfixes': ('gzsl_VS',),
+            'zsl_postfixes': ('zsl_VS',),
+        },
+        'C': {
+            'classifier_kwargs': {
+                'useV': False,
+                'useC': True,
+                'con_size': 2048,
+            },
+            'gzsl_postfixes': ('gzsl_C',),
+            'zsl_postfixes': ('zsl_C',),
+        },
+        'VC': {
+            'classifier_kwargs': {
+                'useC': True,
+                'con_size': 2048,
+            },
+            'gzsl_postfixes': ('gzsl_VC',),
+            'zsl_postfixes': ('zsl_VC',),
+        },
+        'VCS': {
+            'classifier_kwargs': {
+                **decoder_kwargs,
+                'useS': True,
+                'useC': True,
+                'con_size': 2048,
+            },
+            'gzsl_postfixes': ('gzsl_VCS',),
+            'zsl_postfixes': ('zsl_VCS',),
+        },
+    }
+
+
+def build_classifier_kwargs(modality_config, train_con=None):
+    classifier_kwargs = dict(modality_config['classifier_kwargs'])
+    if classifier_kwargs.get('useC'):
+        classifier_kwargs['_train_C'] = train_con
+    return classifier_kwargs
+
+
+def run_classifier(train_feature, train_label, data_loader, nclass, cls_mode, modality_config, train_con=None):
+    classifier_kwargs = build_classifier_kwargs(modality_config, train_con=train_con)
+    return classifier.CLASSIFIER(
+        train_feature,
+        train_label,
+        data_loader,
+        nclass,
+        opt.cuda,
+        opt.classifier_lr,
+        0.5,
+        25,
+        opt.syn_num,
+        cls_mode=cls_mode,
+        **classifier_kwargs,
+    )
+
+
+def update_best_gzsl(best_eval_state, modality_name, cls_result, zerodiff, save_name, save_postfixes):
+    best_metrics = best_eval_state[modality_name]['gzsl']
+    if best_metrics['H'] < cls_result.H:
+        best_metrics['seen'] = cls_result.acc_seen
+        best_metrics['unseen'] = cls_result.acc_unseen
+        best_metrics['H'] = cls_result.H
+        best_metrics['seen_list'] = cls_result.best_acc_S_list
+        best_metrics['unseen_list'] = cls_result.best_acc_U_list
+        for save_postfix in save_postfixes:
+            save_zerodiff(zerodiff, save_name, save_postfix)
+
+
+def update_best_zsl(best_eval_state, modality_name, cls_result, zerodiff, save_name, save_postfixes):
+    best_metrics = best_eval_state[modality_name]['zsl']
+    if best_metrics['acc'] < cls_result.acc:
+        best_metrics['acc'] = cls_result.acc
+        best_metrics['acc_list'] = cls_result.best_acc_zsl_list
+        for save_postfix in save_postfixes:
+            save_zerodiff(zerodiff, save_name, save_postfix)
+
+
+def log_gzsl_result(prefix, cls_result):
+    log_message('%s: U: %.4f, S: %.4f, H: %.4f' % (
+        prefix,
+        as_scalar(cls_result.acc_unseen),
+        as_scalar(cls_result.acc_seen),
+        as_scalar(cls_result.H),
+    ))
+
+
+def log_zsl_result(prefix, acc):
+    log_message('%s: %.4f' % (prefix, as_scalar(acc)))
+
+
+def build_eval_variants(data_loader, syn_feature, syn_con, syn_label, syn_feature_pro, syn_con_pro, syn_label_pro):
+    eval_variants = [
+        {
+            'log_suffix': '',
+            'syn_feature': syn_feature,
+            'syn_con': syn_con,
+            'syn_label': syn_label,
+            'extra_gzsl_postfixes': {},
+        },
+        {
+            'log_suffix': ' pro',
+            'syn_feature': syn_feature_pro,
+            'syn_con': syn_con_pro,
+            'syn_label': syn_label_pro,
+            'extra_gzsl_postfixes': {'VCS': ('gzsl',)},
+        },
+    ]
+
+    for eval_variant in eval_variants:
+        eval_variant['train_X'] = None
+        eval_variant['train_C'] = None
+        eval_variant['train_Y'] = None
+        if opt.gzsl:
+            eval_variant['train_X'] = torch.cat((data_loader.train_feature, eval_variant['syn_feature']), 0)
+            eval_variant['train_C'] = torch.cat((data_loader.train_paco, eval_variant['syn_con']), 0)
+            eval_variant['train_Y'] = torch.cat((data_loader.train_label, eval_variant['syn_label']), 0)
+
+    return eval_variants
+
+
+def log_best_eval_summary(best_eval_state, best_seen_acc_v):
+    if opt.gzsl:
+        for modality_name in MODALITY_ORDER:
+            gzsl_metrics = best_eval_state[modality_name]['gzsl']
+            log_message('best GZSL (%s): U: %.4f, S: %.4f, H: %.4f' % (
+                modality_name,
+                as_scalar(gzsl_metrics['unseen']),
+                as_scalar(gzsl_metrics['seen']),
+                as_scalar(gzsl_metrics['H']),
+            ))
+            log_message('best_acc_seen_list (%s): %s' % (modality_name, gzsl_metrics['seen_list']))
+            log_message('best_acc_unseen_list (%s): %s' % (modality_name, gzsl_metrics['unseen_list']))
+
+    for modality_name in MODALITY_ORDER:
+        zsl_metrics = best_eval_state[modality_name]['zsl']
+        log_message('best ZSL (%s): %.4f' % (modality_name, as_scalar(zsl_metrics['acc'])))
+        log_message('best_acc_zsl_list (%s): %s' % (modality_name, zsl_metrics['acc_list']))
+
+    log_message('best seen (V): %.4f' % as_scalar(best_seen_acc_v))
 
 
 class ZERODIFF(torch.nn.Module):
@@ -280,6 +511,11 @@ class ZERODIFF(torch.nn.Module):
         self.netR.load_state_dict(netR_weights)
         self.netR.eval()
 
+        resume_checkpoint_path = opt.netG_model_path or opt.model_path
+        if resume_checkpoint_path:
+            load_zerodiff(self, resume_checkpoint_path)
+            print("Loaded DFG checkpoint from:", resume_checkpoint_path)
+
         self.interval_recorder_sum = {}
         self.init_recorder()
 
@@ -340,16 +576,16 @@ class ZERODIFF(torch.nn.Module):
         anchor_loss = anchor_distance_loss + anchor_angle_loss
         return anchor_distance_loss, anchor_angle_loss, anchor_loss
 
-    def build_relation_teacher(self, att_0_real):
+    def build_relation_teacher(self, att_0_real, con_0_real):
         with torch.no_grad():
             n_sample = att_0_real.shape[0]
             z_con = torch.randn(n_sample, self.dim_noise).to(self.device)
-            _ts_con = (self.n_T - 1) + torch.zeros((n_sample,), dtype=torch.int64).to(self.device)
-            r_tp1 = torch.randn(n_sample, 2048).to(self.device)
-            r_0_teacher = self.netR(z_con, att_0_real, r_tp1, _ts_con)
+            _ts_con = torch.randint(0, self.n_T, (n_sample,), dtype=torch.int64).to(self.device)
+            r_t_real, _, _ = self.q_sample_pairs(con_0_real, _ts_con)
+            r_0_teacher = self.netR(z_con, att_0_real, r_t_real, _ts_con)
         return r_0_teacher.detach()
 
-    def update_relation_embedding(self, x_0_real, att_0_real):
+    def update_relation_embedding(self, x_0_real, att_0_real, con_0_real):
         real_vsra_distance_loss = torch.tensor(0.0, device=self.device)
         real_vsra_angle_loss = torch.tensor(0.0, device=self.device)
         real_vsra_loss = torch.tensor(0.0, device=self.device)
@@ -367,7 +603,7 @@ class ZERODIFF(torch.nn.Module):
         self.optimizerRelProj.zero_grad()
         self.optimizerCTeacherEmbed.zero_grad()
 
-        r_0_teacher = self.build_relation_teacher(att_0_real)
+        r_0_teacher = self.build_relation_teacher(att_0_real, con_0_real)
         c_teacher = self.netCTeacherEmbed(r_0_teacher)
         q_0_real = self.netRelProj(x_0_real)
         real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss = self.compute_vsra_losses(
@@ -398,20 +634,20 @@ class ZERODIFF(torch.nn.Module):
         return self.compute_vsra_losses(q_0_fake, att_0_real, c_teacher)
 
     def forward(self):
-        gp_sum = 0  # lAMBDA VARIABLE
-        for iter_d in range(opt.critic_iter):
-            x_0_real, con_0_real, att_0_real, label = sample(self.batch_size)
-            D_cost, Wasserstein_D, gp_sum, distill_loss = self.update_D(x_0_real, con_0_real, att_0_real, gp_sum, label)
+        gp_sum = 0  # Running sum used for adaptive lambda scaling.
+        for _ in range(opt.critic_iter):
+            x_0_real, con_0_real, att_0_real, _ = sample(self.batch_size)
+            D_cost, Wasserstein_D, gp_sum, distill_loss = self.update_D(x_0_real, con_0_real, att_0_real, gp_sum)
 
         gp_sum /= (self.gamma_ADV * self.lambda1 * opt.critic_iter)
         if gp_sum > 1.05:
             self.lambda1 *= 1.1
         elif gp_sum < 1.001:
             self.lambda1 /= 1.1
-        G_cost, vae_loss_seen, real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss, vsra_distance_loss, vsra_angle_loss, vsra_loss = self.update_G(x_0_real, con_0_real, att_0_real, label)
+        G_cost, vae_loss_seen, real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss, vsra_distance_loss, vsra_angle_loss, vsra_loss = self.update_G(x_0_real, con_0_real, att_0_real)
         return D_cost, Wasserstein_D, distill_loss, G_cost, vae_loss_seen, real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss, vsra_distance_loss, vsra_angle_loss, vsra_loss
 
-    def update_D(self, x_0_real, con_0_real, att_0_real, gp_sum, label):
+    def update_D(self, x_0_real, con_0_real, att_0_real, gp_sum):
         for p in self.netE.parameters():
             p.requires_grad = False
         for p in self.netG.parameters():
@@ -429,7 +665,7 @@ class ZERODIFF(torch.nn.Module):
         for p in self.netDec.parameters():
             p.requires_grad = True
 
-        z, means, log_var = self.netE(x_0_real, att_0_real)
+        z, _, _ = self.netE(x_0_real, att_0_real)
 
         _ts_feat = torch.randint(0, self.n_T, (self.batch_size,), dtype=torch.int64).to(self.device)
         x_t_real, x_tp1_real, ratio_x0 = self.q_sample_pairs(x_0_real, _ts_feat)
@@ -447,16 +683,16 @@ class ZERODIFF(torch.nn.Module):
         R_cost.backward()
 
         criticD_real_x0 = -self.netD_x0(x_0_real, att_0_real).mean() if self.gamma_x0 > 0 else torch.tensor(0.0).to(self.device)
-        criticG_real_xt = -self.netD_xt(x_t_real, x_tp1_real, att_0_real, con_0_real, _ts_feat).mean() if self.gamma_xt > 0 else torch.tensor(0.0).to(self.device)
+        criticD_real_xt_mean = -self.netD_xt(x_t_real, x_tp1_real, att_0_real, con_0_real, _ts_feat).mean() if self.gamma_xt > 0 else torch.tensor(0.0).to(self.device)
         criticD_real_xc = -self.netD_xc(x_0_real, con_0_real).mean()
-        criticD_real = self.gamma_x0 * criticD_real_x0 + self.gamma_xt * criticG_real_xt + criticD_real_xc
+        criticD_real = self.gamma_x0 * criticD_real_x0 + self.gamma_xt * criticD_real_xt_mean + criticD_real_xc
         criticD_real = self.gamma_ADV * criticD_real
         criticD_real.backward()
 
         criticD_fake_x0 = self.netD_x0(x_0_fake.detach(), att_0_real).mean() if self.gamma_x0 > 0 else torch.tensor(0.0).to(self.device)
-        criticG_fake_xt = self.netD_xt(x_t_fake.detach(), x_tp1_real, att_0_real, con_0_real, _ts_feat).mean() if self.gamma_xt > 0 else torch.tensor(0.0).to(self.device)
+        criticD_fake_xt_mean = self.netD_xt(x_t_fake.detach(), x_tp1_real, att_0_real, con_0_real, _ts_feat).mean() if self.gamma_xt > 0 else torch.tensor(0.0).to(self.device)
         criticD_fake_xc = self.netD_xc(x_0_fake.detach(), con_0_real).mean()
-        criticD_fake = self.gamma_x0 * criticD_fake_x0 + self.gamma_xt * criticG_fake_xt + criticD_fake_xc
+        criticD_fake = self.gamma_x0 * criticD_fake_x0 + self.gamma_xt * criticD_fake_xt_mean + criticD_fake_xc
         criticD_fake = self.gamma_ADV * criticD_fake
         criticD_fake.backward()
 
@@ -500,7 +736,7 @@ class ZERODIFF(torch.nn.Module):
 
         with torch.no_grad():
             test_seen_x_0_real, test_seen_con_0_real, test_seen_att_0_real = sampleTestSeen()
-            test_seen_x_t_real, test_seen_x_tp1_real, ratio_x0 = self.q_sample_pairs(test_seen_x_0_real, _ts_feat)
+            test_seen_x_t_real, test_seen_x_tp1_real, _ = self.q_sample_pairs(test_seen_x_0_real, _ts_feat)
             criticD_test_real_x0 = self.netD_x0(test_seen_x_0_real, test_seen_att_0_real)
             criticD_test_real_xt = self.netD_xt(test_seen_x_t_real, test_seen_x_tp1_real, test_seen_att_0_real, test_seen_con_0_real, _ts_feat)
             criticD_test_real_xc = self.netD_xc(test_seen_x_0_real, test_seen_con_0_real)
@@ -517,7 +753,7 @@ class ZERODIFF(torch.nn.Module):
 
         return D_cost, Wasserstein_D, gp_sum, distill_loss
 
-    def update_G(self, x_0_real, con_0_real, att_0_real, label):
+    def update_G(self, x_0_real, con_0_real, att_0_real):
         real_vsra_distance_loss = torch.tensor(0.0, device=self.device)
         real_vsra_angle_loss = torch.tensor(0.0, device=self.device)
         real_vsra_loss = torch.tensor(0.0, device=self.device)
@@ -526,6 +762,7 @@ class ZERODIFF(torch.nn.Module):
             real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss, c_teacher = self.update_relation_embedding(
                 x_0_real,
                 att_0_real,
+                con_0_real,
             )
 
         for p in self.netE.parameters():
@@ -553,7 +790,7 @@ class ZERODIFF(torch.nn.Module):
         z, means, log_var = self.netE(x_0_real, att_0_real)
 
         _ts_feat = torch.randint(0, self.n_T, (self.batch_size,), dtype=torch.int64).to(self.device)
-        x_t_real, x_tp1_real, _ = self.q_sample_pairs(x_0_real, _ts_feat)
+        _, x_tp1_real, _ = self.q_sample_pairs(x_0_real, _ts_feat)
         x_0_fake = self.netG(z, att_0_real, con_0_real, x_tp1_real.detach(), _ts_feat)
         x_t_fake = self.sample_posterior(x_0_fake, x_tp1_real, _ts_feat)
 
@@ -673,38 +910,9 @@ zerodiff = ZERODIFF(data, n_T=opt.n_T, betas=(opt.ddpmbeta1, opt.ddpmbeta2), see
                   netR_model_path=opt.netR_model_path, device='cuda')
 zerodiff.train()
 
-best_gzsl_acc_V = 0
-best_acc_seen_V = 0
-best_acc_unseen_V = 0
-best_zsl_acc_V = 0
-
-best_gzsl_acc_VS = 0
-best_acc_seen_VS = 0
-best_acc_unseen_VS = 0
-best_zsl_acc_VS = 0
-
-best_gzsl_acc_C = 0
-best_acc_seen_C = 0
-best_acc_unseen_C = 0
-best_zsl_acc_C = 0
-
-best_gzsl_acc_VC = 0
-best_acc_seen_VC = 0
-best_acc_unseen_VC = 0
-best_zsl_acc_VC = 0
-
-best_gzsl_acc_VCS = 0
-best_acc_seen_VCS = 0
-best_acc_unseen_VCS = 0
-best_zsl_acc_VCS = 0
-
-best_seen_acc_V = 0
-
-best_acc_seen_list_V, best_acc_unseen_list_V, best_acc_zsl_list_V = [], [], []
-best_acc_seen_list_C, best_acc_unseen_list_C, best_acc_zsl_list_C = [], [], []
-best_acc_seen_list_VC, best_acc_unseen_list_VC, best_acc_zsl_list_VC = [], [], []
-best_acc_seen_list_VS, best_acc_unseen_list_VS, best_acc_zsl_list_VS = [], [], []
-best_acc_seen_list_VCS, best_acc_unseen_list_VCS, best_acc_zsl_list_VCS = [], [], []
+modality_configs = get_eval_modality_configs(zerodiff)
+best_eval_state = init_best_eval_state()
+best_seen_acc_V = 0.0
 
 
 n_iter = get_train_steps_per_epoch(data)
@@ -712,15 +920,11 @@ for epoch in range(0, opt.nepoch):
     for i in range(0, data.ntrain, opt.batch_size):
         D_cost, Wasserstein_D, distill_loss, G_cost, vae_loss_seen, real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss, vsra_distance_loss, vsra_angle_loss, vsra_loss = zerodiff()
 
-    log_record = '[%d/%d] Loss_D: %.4f, Wasserstein_dist:%.4f, distill_loss:%.4f' % (
-        epoch, opt.nepoch, D_cost.item(), Wasserstein_D.item(), distill_loss.item())
-    print(log_record)
-    logger.write(log_record + '\n')
+    log_message('[%d/%d] Loss_D: %.4f, Wasserstein_dist:%.4f, distill_loss:%.4f' % (
+        epoch, opt.nepoch, D_cost.item(), Wasserstein_D.item(), distill_loss.item()))
 
-    log_record = '[%d/%d] Loss_G: %.4f, vae_loss_seen:%.4f, real_vsra_distance_loss:%.4f, real_vsra_angle_loss:%.4f, real_vsra_loss:%.4f, vsra_distance_loss:%.4f, vsra_angle_loss:%.4f, vsra_loss:%.4f' % (
-        epoch, opt.nepoch, G_cost.item(), vae_loss_seen.item(), real_vsra_distance_loss.item(), real_vsra_angle_loss.item(), real_vsra_loss.item(), vsra_distance_loss.item(), vsra_angle_loss.item(), vsra_loss.item())
-    print(log_record)
-    logger.write(log_record + '\n')
+    log_message('[%d/%d] Loss_G: %.4f, vae_loss_seen:%.4f, real_vsra_distance_loss:%.4f, real_vsra_angle_loss:%.4f, real_vsra_loss:%.4f, vsra_distance_loss:%.4f, vsra_angle_loss:%.4f, vsra_loss:%.4f' % (
+        epoch, opt.nepoch, G_cost.item(), vae_loss_seen.item(), real_vsra_distance_loss.item(), real_vsra_angle_loss.item(), real_vsra_loss.item(), vsra_distance_loss.item(), vsra_angle_loss.item(), vsra_loss.item()))
 
     criticD_train_real_x0 = zerodiff.interval_recorder_sum['criticD_train_real_x0'].item() / n_iter
     criticD_train_real_xt = zerodiff.interval_recorder_sum['criticD_train_real_xt'].item() / n_iter
@@ -735,433 +939,92 @@ for epoch in range(0, opt.nepoch):
     criticD_train_fake_xc = zerodiff.interval_recorder_sum['criticD_train_fake_xc'].item() / n_iter
     zerodiff.init_recorder()
 
-    log_record = '[%d/%d] D_train_real_x0: %.6f, D_train_real_xt: %.6f, D_train_real_xc: %.6f' % (epoch, opt.nepoch, criticD_train_real_x0, criticD_train_real_xt, criticD_train_real_xc)
-    print(log_record)
-    logger.write(log_record + '\n')
+    log_message('[%d/%d] D_train_real_x0: %.6f, D_train_real_xt: %.6f, D_train_real_xc: %.6f' % (
+        epoch, opt.nepoch, criticD_train_real_x0, criticD_train_real_xt, criticD_train_real_xc))
 
-    log_record = '[%d/%d] D_test_real_x0: %.6f, D_test_real_xt: %.6f, D_test_real_xc: %.6f' % (epoch, opt.nepoch, criticD_test_real_x0, criticD_test_real_xt, criticD_test_real_xc)
-    print(log_record)
-    logger.write(log_record + '\n')
+    log_message('[%d/%d] D_test_real_x0: %.6f, D_test_real_xt: %.6f, D_test_real_xc: %.6f' % (
+        epoch, opt.nepoch, criticD_test_real_x0, criticD_test_real_xt, criticD_test_real_xc))
 
-    log_record = '[%d/%d] D_train_fake_x0: %.6f, D_train_fake_xt: %.6f, D_train_fake_xc: %.6f' % (epoch, opt.nepoch, criticD_train_fake_x0, criticD_train_fake_xt, criticD_train_fake_xc)
-    print(log_record)
-    logger.write(log_record + '\n')
+    log_message('[%d/%d] D_train_fake_x0: %.6f, D_train_fake_xt: %.6f, D_train_fake_xc: %.6f' % (
+        epoch, opt.nepoch, criticD_train_fake_x0, criticD_train_fake_xt, criticD_train_fake_xc))
 
     if epoch % opt.eval_interval == 0 or epoch == (opt.nepoch - 1):
         zerodiff.eval()
         syn_feature, syn_con, syn_label = generate_syn_feature(zerodiff, data.unseenclasses, data.attribute, opt.syn_num)
         syn_feature_pro, syn_con_pro, syn_label_pro = generate_syn_feature(zerodiff, data.unseenclasses, data.attribute, opt.syn_num, progressive=True)
-        syn_feature_seen, syn_con_seen, syn_label_seen = generate_syn_feature(zerodiff, data.seenclasses, data.attribute, opt.syn_num)
+        syn_feature_seen, _, syn_label_seen = generate_syn_feature(zerodiff, data.seenclasses, data.attribute, opt.syn_num)
 
-        # Train Seen classifier in V
-        seen_cls_V = classifier.CLASSIFIER(syn_feature_seen, util.map_label(syn_label_seen, data.seenclasses), \
-                                           data, data.seenclasses.size(0), opt.cuda, opt.classifier_lr, 0.5, 25,
-                                           opt.syn_num, cls_mode="seen")
-        acc = seen_cls_V.acc
-        if best_seen_acc_V < acc:
-            best_seen_acc_V = acc
-        log_record = 'Seen (V): %.4f' % (acc)
-        print(log_record)
-        logger.write(log_record + '\n')
+        eval_variants = build_eval_variants(
+            data,
+            syn_feature,
+            syn_con,
+            syn_label,
+            syn_feature_pro,
+            syn_con_pro,
+            syn_label_pro,
+        )
 
-        # Generalized zero-shot learning
+        seen_cls_V = run_classifier(
+            syn_feature_seen,
+            util.map_label(syn_label_seen, data.seenclasses),
+            data,
+            data.seenclasses.size(0),
+            "seen",
+            modality_configs['V'],
+        )
+        if best_seen_acc_V < seen_cls_V.acc:
+            best_seen_acc_V = seen_cls_V.acc
+        log_zsl_result('Seen (V)', seen_cls_V.acc)
+
         if opt.gzsl:
-            # Concatenate real seen features with synthesized unseen features
-            train_X = torch.cat((data.train_feature, syn_feature), 0)
-            train_C = torch.cat((data.train_paco, syn_con), 0)
-            train_Y = torch.cat((data.train_label, syn_label), 0)
-            train_X_pro = torch.cat((data.train_feature, syn_feature_pro), 0)
-            train_C_pro = torch.cat((data.train_paco, syn_con_pro), 0)
-            train_Y_pro = torch.cat((data.train_label, syn_label_pro), 0)
-            nclass = opt.nclass_all
+            for eval_variant in eval_variants:
+                for modality_name in MODALITY_ORDER:
+                    modality_config = modality_configs[modality_name]
+                    save_postfixes = modality_config['gzsl_postfixes'] + eval_variant['extra_gzsl_postfixes'].get(modality_name, ())
+                    gzsl_cls = run_classifier(
+                        eval_variant['train_X'],
+                        eval_variant['train_Y'],
+                        data,
+                        opt.nclass_all,
+                        "GZSL",
+                        modality_config,
+                        train_con=eval_variant['train_C'],
+                    )
+                    update_best_gzsl(
+                        best_eval_state,
+                        modality_name,
+                        gzsl_cls,
+                        zerodiff,
+                        model_save_name,
+                        save_postfixes,
+                    )
+                    log_gzsl_result('GZSL%s (%s)' % (eval_variant['log_suffix'], modality_name), gzsl_cls)
 
-            # Train GZSL classifier in V
-            gzsl_cls_V = classifier.CLASSIFIER(train_X, train_Y, data, nclass, opt.cuda, opt.classifier_lr, 0.5,  25, opt.syn_num, cls_mode="GZSL")
-            if best_gzsl_acc_V < gzsl_cls_V.H:
-                best_acc_seen_V, best_acc_unseen_V, best_gzsl_acc_V = gzsl_cls_V.acc_seen, gzsl_cls_V.acc_unseen, gzsl_cls_V.H
-                best_acc_unseen_list_V, best_acc_seen_list_V = gzsl_cls_V.best_acc_U_list, gzsl_cls_V.best_acc_S_list
-                save_zerodiff(zerodiff, model_save_name, "gzsl_V")
-            log_record = 'GZSL (V): U: %.4f, S: %.4f, H: %.4f' % (
-            gzsl_cls_V.acc_unseen, gzsl_cls_V.acc_seen, gzsl_cls_V.H)
-            print(log_record)
-            logger.write(log_record + '\n')
+        for eval_variant in eval_variants:
+            mapped_syn_label = util.map_label(eval_variant['syn_label'], data.unseenclasses)
+            for modality_name in MODALITY_ORDER:
+                modality_config = modality_configs[modality_name]
+                zsl_cls = run_classifier(
+                    eval_variant['syn_feature'],
+                    mapped_syn_label,
+                    data,
+                    data.unseenclasses.size(0),
+                    "ZSL",
+                    modality_config,
+                    train_con=eval_variant['syn_con'],
+                )
+                update_best_zsl(
+                    best_eval_state,
+                    modality_name,
+                    zsl_cls,
+                    zerodiff,
+                    model_save_name,
+                    modality_config['zsl_postfixes'],
+                )
+                log_zsl_result('ZSL%s (%s)' % (eval_variant['log_suffix'], modality_name), zsl_cls.acc)
 
-            gzsl_cls_V = classifier.CLASSIFIER(train_X_pro, train_Y_pro, data, nclass, opt.cuda, opt.classifier_lr, 0.5, \
-                                               25, opt.syn_num, cls_mode="GZSL")
-            if best_gzsl_acc_V < gzsl_cls_V.H:
-                best_acc_seen_V, best_acc_unseen_V, best_gzsl_acc_V = gzsl_cls_V.acc_seen, gzsl_cls_V.acc_unseen, gzsl_cls_V.H
-                best_acc_unseen_list_V, best_acc_seen_list_V = gzsl_cls_V.best_acc_U_list, gzsl_cls_V.best_acc_S_list
-                save_zerodiff(zerodiff, model_save_name, "gzsl_V")
-            log_record = 'GZSL pro (V): U: %.4f, S: %.4f, H: %.4f' % (
-            gzsl_cls_V.acc_unseen, gzsl_cls_V.acc_seen, gzsl_cls_V.H)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            # Train GZSL classifier in VS
-            gzsl_cls_VS = classifier.CLASSIFIER(train_X, train_Y, data, nclass, opt.cuda, opt.classifier_lr, 0.5, \
-                                                25, opt.syn_num, cls_mode="GZSL", netDec=zerodiff.netDec,
-                                                dec_size=opt.attSize, dec_hidden_size=4096, useS=True)
-            if best_gzsl_acc_VS < gzsl_cls_VS.H:
-                best_acc_seen_VS, best_acc_unseen_VS, best_gzsl_acc_VS = gzsl_cls_VS.acc_seen, gzsl_cls_VS.acc_unseen, gzsl_cls_VS.H
-                best_acc_unseen_list_VS, best_acc_seen_list_VS = gzsl_cls_VS.best_acc_U_list, gzsl_cls_VS.best_acc_S_list
-                save_zerodiff(zerodiff, model_save_name, "gzsl_VS")
-            log_record = 'GZSL (VS): U: %.4f, S: %.4f, H: %.4f' % (
-            gzsl_cls_VS.acc_unseen, gzsl_cls_VS.acc_seen, gzsl_cls_VS.H)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            # Train GZSL classifier in VS
-            gzsl_cls_VS = classifier.CLASSIFIER(train_X_pro, train_Y_pro, data, nclass, opt.cuda, opt.classifier_lr,
-                                                0.5, 25, opt.syn_num, cls_mode="GZSL", netDec=zerodiff.netDec,
-                                                dec_size=opt.attSize,
-                                                dec_hidden_size=4096, useS=True)
-            if best_gzsl_acc_VS < gzsl_cls_VS.H:
-                best_acc_seen_VS, best_acc_unseen_VS, best_gzsl_acc_VS = gzsl_cls_VS.acc_seen, gzsl_cls_VS.acc_unseen, gzsl_cls_VS.H
-                best_acc_unseen_list_VS, best_acc_seen_list_VS = gzsl_cls_VS.best_acc_U_list, gzsl_cls_VS.best_acc_S_list
-                save_zerodiff(zerodiff, model_save_name, "gzsl_VS")
-            log_record = 'GZSL pro (VS): U: %.4f, S: %.4f, H: %.4f' % (
-            gzsl_cls_VS.acc_unseen, gzsl_cls_VS.acc_seen, gzsl_cls_VS.H)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            # Train GZSL classifier in C
-            gzsl_cls_C = classifier.CLASSIFIER(train_X, train_Y, data, nclass, opt.cuda, opt.classifier_lr, 0.5, \
-                                               25, opt.syn_num, cls_mode="GZSL", con_size=2048, _train_C = train_C, useV=False, useC=True)
-            if best_gzsl_acc_C < gzsl_cls_C.H:
-                best_acc_seen_C, best_acc_unseen_C, best_gzsl_acc_C = gzsl_cls_C.acc_seen, gzsl_cls_C.acc_unseen, gzsl_cls_C.H
-                best_acc_unseen_list_C, best_acc_seen_list_C = gzsl_cls_C.best_acc_U_list, gzsl_cls_C.best_acc_S_list
-                save_zerodiff(zerodiff, model_save_name, "gzsl_C")
-            log_record = 'GZSL (C): U: %.4f, S: %.4f, H: %.4f' % (
-                gzsl_cls_C.acc_unseen, gzsl_cls_C.acc_seen, gzsl_cls_C.H)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            # Train GZSL classifier in C
-            gzsl_cls_C = classifier.CLASSIFIER(train_X_pro, train_Y_pro, data, nclass, opt.cuda, opt.classifier_lr, 0.5, \
-                                               25, opt.syn_num, cls_mode="GZSL", con_size=2048, _train_C = train_C_pro, useV=False, useC=True)
-            if best_gzsl_acc_C < gzsl_cls_C.H:
-                best_acc_seen_C, best_acc_unseen_C, best_gzsl_acc_C = gzsl_cls_C.acc_seen, gzsl_cls_C.acc_unseen, gzsl_cls_C.H
-                best_acc_unseen_list_C, best_acc_seen_list_C = gzsl_cls_C.best_acc_U_list, gzsl_cls_C.best_acc_S_list
-                save_zerodiff(zerodiff, model_save_name, "gzsl_C")
-            log_record = 'GZSL pro (C): U: %.4f, S: %.4f, H: %.4f' % (
-                gzsl_cls_C.acc_unseen, gzsl_cls_C.acc_seen, gzsl_cls_C.H)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            # Train GZSL classifier in VC
-            gzsl_cls_VC = classifier.CLASSIFIER(train_X, train_Y, data, nclass, opt.cuda, opt.classifier_lr, 0.5, \
-                                                25, opt.syn_num, cls_mode="GZSL", con_size=2048, _train_C = train_C, useC=True)
-            if best_gzsl_acc_VC < gzsl_cls_VC.H:
-                best_acc_seen_VC, best_acc_unseen_VC, best_gzsl_acc_VC = gzsl_cls_VC.acc_seen, gzsl_cls_VC.acc_unseen, gzsl_cls_VC.H
-                best_acc_unseen_list_VC, best_acc_seen_list_VC = gzsl_cls_VC.best_acc_U_list, gzsl_cls_VC.best_acc_S_list
-                save_zerodiff(zerodiff, model_save_name, "gzsl_VC")
-            log_record = 'GZSL (VC): U: %.4f, S: %.4f, H: %.4f' % (
-            gzsl_cls_VC.acc_unseen, gzsl_cls_VC.acc_seen, gzsl_cls_VC.H)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            # Train GZSL classifier in VC
-            gzsl_cls_VC = classifier.CLASSIFIER(train_X_pro, train_Y_pro, data, nclass, opt.cuda, opt.classifier_lr,
-                                                0.5, 25, opt.syn_num, cls_mode="GZSL", con_size=2048, _train_C = train_C_pro, useC=True)
-            if best_gzsl_acc_VC < gzsl_cls_VC.H:
-                best_acc_seen_VC, best_acc_unseen_VC, best_gzsl_acc_VC = gzsl_cls_VC.acc_seen, gzsl_cls_VC.acc_unseen, gzsl_cls_VC.H
-                best_acc_unseen_list_VC, best_acc_seen_list_VC = gzsl_cls_VC.best_acc_U_list, gzsl_cls_VC.best_acc_S_list
-                save_zerodiff(zerodiff, model_save_name, "gzsl_VC")
-            log_record = 'GZSL pro (VC): U: %.4f, S: %.4f, H: %.4f' % (
-            gzsl_cls_VC.acc_unseen, gzsl_cls_VC.acc_seen, gzsl_cls_VC.H)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            # Train GZSL classifier in VCS
-            gzsl_cls_VCS = classifier.CLASSIFIER(train_X, train_Y, data, nclass, opt.cuda, opt.classifier_lr, 0.5, \
-                                                 25, opt.syn_num, cls_mode="GZSL", netDec=zerodiff.netDec,
-                                                 dec_size=opt.attSize, dec_hidden_size=4096, useS=True, con_size=2048, _train_C = train_C, useC=True)
-            if best_gzsl_acc_VCS < gzsl_cls_VCS.H:
-                best_acc_seen_VCS, best_acc_unseen_VCS, best_gzsl_acc_VCS = gzsl_cls_VCS.acc_seen, gzsl_cls_VCS.acc_unseen, gzsl_cls_VCS.H
-                best_acc_unseen_list_VCS, best_acc_seen_list_VCS = gzsl_cls_VCS.best_acc_U_list, gzsl_cls_VCS.best_acc_S_list
-                save_zerodiff(zerodiff, model_save_name, "gzsl_VCS")
-            log_record = 'GZSL (VCS): U: %.4f, S: %.4f, H: %.4f' % (
-                gzsl_cls_VCS.acc_unseen, gzsl_cls_VCS.acc_seen, gzsl_cls_VCS.H)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            # Train GZSL classifier in VC
-            gzsl_cls_VCS = classifier.CLASSIFIER(train_X_pro, train_Y_pro, data, nclass, opt.cuda, opt.classifier_lr,
-                                                 0.5,  25, opt.syn_num, cls_mode="GZSL", netDec=zerodiff.netDec,
-                                                 dec_size=opt.attSize, dec_hidden_size=4096, useS=True,
-                                                 con_size=2048, _train_C = train_C_pro, useC=True)  #
-            if best_gzsl_acc_VCS < gzsl_cls_VCS.H:
-                best_acc_seen_VCS, best_acc_unseen_VCS, best_gzsl_acc_VCS = gzsl_cls_VCS.acc_seen, gzsl_cls_VCS.acc_unseen, gzsl_cls_VCS.H
-                save_zerodiff(zerodiff, model_save_name, "gzsl")
-                best_acc_unseen_list_VCS, best_acc_seen_list_VCS = gzsl_cls_VCS.best_acc_U_list, gzsl_cls_VCS.best_acc_S_list
-                save_zerodiff(zerodiff, model_save_name, "gzsl_VCS")
-
-            log_record = 'GZSL pro (VCS): U: %.4f, S: %.4f, H: %.4f' % (
-                gzsl_cls_VCS.acc_unseen, gzsl_cls_VCS.acc_seen, gzsl_cls_VCS.H)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-        # Zero-shot learning
-        # Train ZSL classifier in V
-        zsl_cls_V = classifier.CLASSIFIER(syn_feature, util.map_label(syn_label, data.unseenclasses), \
-                                          data, data.unseenclasses.size(0), opt.cuda, opt.classifier_lr, 0.5, 25,
-                                          opt.syn_num, cls_mode="ZSL")
-        acc = zsl_cls_V.acc
-        if best_zsl_acc_V < acc:
-            best_zsl_acc_V = acc
-            best_acc_zsl_list_V = zsl_cls_V.best_acc_zsl_list
-            save_zerodiff(zerodiff, model_save_name, "zsl_V")
-        log_record = 'ZSL (V): %.4f' % (acc)
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        # Train ZSL classifier in V
-        zsl_cls_V = classifier.CLASSIFIER(syn_feature_pro, util.map_label(syn_label_pro, data.unseenclasses), \
-                                          data, data.unseenclasses.size(0), opt.cuda, opt.classifier_lr, 0.5, 25,
-                                          opt.syn_num,  cls_mode="ZSL")
-
-        acc = zsl_cls_V.acc
-        if best_zsl_acc_V < acc:
-            best_zsl_acc_V = acc
-            best_acc_zsl_list_V = zsl_cls_V.best_acc_zsl_list
-            save_zerodiff(zerodiff, model_save_name, "zsl_V")
-        log_record = 'ZSL pro (V): %.4f' % (acc)
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        # Train ZSL classifier in VS
-        zsl_cls_VS = classifier.CLASSIFIER(syn_feature, util.map_label(syn_label, data.unseenclasses), \
-                                           data, data.unseenclasses.size(0), opt.cuda, opt.classifier_lr, 0.5, 25,
-                                           opt.syn_num, cls_mode="ZSL", netDec=zerodiff.netDec, dec_size=opt.attSize,
-                                           dec_hidden_size=4096, useS=True)
-        acc = zsl_cls_VS.acc
-        if best_zsl_acc_VS < acc:
-            best_zsl_acc_VS = acc
-            best_acc_zsl_list_VS = zsl_cls_VS.best_acc_zsl_list
-            save_zerodiff(zerodiff, model_save_name, "zsl_VS")
-        log_record = 'ZSL (VS): %.4f' % (acc)
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        # Train ZSL classifier in VS
-        zsl_cls_VS = classifier.CLASSIFIER(syn_feature_pro, util.map_label(syn_label_pro, data.unseenclasses), \
-                                           data, data.unseenclasses.size(0), opt.cuda, opt.classifier_lr, 0.5, 25,
-                                           opt.syn_num, cls_mode="ZSL", netDec=zerodiff.netDec, dec_size=opt.attSize,
-                                           dec_hidden_size=4096, useS=True)
-
-        acc = zsl_cls_VS.acc
-        if best_zsl_acc_VS < acc:
-            best_zsl_acc_VS = acc
-            best_acc_zsl_list_VS = zsl_cls_VS.best_acc_zsl_list
-            save_zerodiff(zerodiff, model_save_name, "zsl_VS")
-        log_record = 'ZSL pro (VS): %.4f' % (acc)
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        # Train ZSL classifier in C
-        zsl_cls_C = classifier.CLASSIFIER(syn_feature, util.map_label(syn_label, data.unseenclasses), \
-                                          data, data.unseenclasses.size(0), opt.cuda, opt.classifier_lr, 0.5, 25,
-                                          opt.syn_num, cls_mode="ZSL", useV=False, con_size=2048, _train_C = syn_con, useC=True)
-        acc = zsl_cls_C.acc
-        if best_zsl_acc_C < acc:
-            best_zsl_acc_C = acc
-            best_acc_zsl_list_C = zsl_cls_C.best_acc_zsl_list
-            save_zerodiff(zerodiff, model_save_name, "zsl_C")
-        log_record = 'ZSL (C): %.4f' % (acc)
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        # Train ZSL classifier in C
-        zsl_cls_C = classifier.CLASSIFIER(syn_feature_pro, util.map_label(syn_label_pro, data.unseenclasses), \
-                                          data, data.unseenclasses.size(0), opt.cuda, opt.classifier_lr, 0.5, 25,
-                                          opt.syn_num, cls_mode="ZSL", useV=False, con_size=2048, _train_C = syn_con_pro,  useC=True)
-        acc = zsl_cls_C.acc
-        if best_zsl_acc_C < acc:
-            best_zsl_acc_C = acc
-            best_acc_zsl_list_C = zsl_cls_C.best_acc_zsl_list
-            save_zerodiff(zerodiff, model_save_name, "zsl_C")
-        log_record = 'ZSL pro (C): %.4f' % (acc)
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        # Train ZSL classifier in VC
-        zsl_cls_VC = classifier.CLASSIFIER(syn_feature, util.map_label(syn_label, data.unseenclasses), \
-                                           data, data.unseenclasses.size(0), opt.cuda, opt.classifier_lr, 0.5, 25,
-                                           opt.syn_num, cls_mode="ZSL", con_size=2048, _train_C = syn_con, useC=True)
-        acc = zsl_cls_VC.acc
-        if best_zsl_acc_VC < acc:
-            best_zsl_acc_VC = acc
-            best_acc_zsl_list_VC = zsl_cls_VC.best_acc_zsl_list
-            save_zerodiff(zerodiff, model_save_name, "zsl_VC")
-        log_record = 'ZSL (VC): %.4f' % (acc)
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        # Train ZSL classifier in VC
-        zsl_cls_VC = classifier.CLASSIFIER(syn_feature_pro, util.map_label(syn_label_pro, data.unseenclasses), \
-                                           data, data.unseenclasses.size(0), opt.cuda, opt.classifier_lr, 0.5, 25,
-                                           opt.syn_num, cls_mode="ZSL", con_size=2048, _train_C = syn_con_pro, useC=True)
-        acc = zsl_cls_VC.acc
-        if best_zsl_acc_VC < acc:
-            best_zsl_acc_VC = acc
-            best_acc_zsl_list_VC = zsl_cls_VC.best_acc_zsl_list
-            save_zerodiff(zerodiff, model_save_name, "zsl_VC")
-        log_record = 'ZSL pro (VC): %.4f' % (acc)
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        # Train ZSL classifier in VCS
-        zsl_cls_VCS = classifier.CLASSIFIER(syn_feature, util.map_label(syn_label, data.unseenclasses), \
-                                            data, data.unseenclasses.size(0), opt.cuda, opt.classifier_lr, 0.5, 25,
-                                            opt.syn_num, cls_mode="ZSL", netDec=zerodiff.netDec, dec_size=opt.attSize,
-                                            dec_hidden_size=4096, useS=True, con_size=2048, _train_C = syn_con,  useC=True)
-        acc = zsl_cls_VCS.acc
-        if best_zsl_acc_VCS < acc:
-            best_zsl_acc_VCS = acc
-            best_acc_zsl_list_VCS = zsl_cls_VCS.best_acc_zsl_list
-            save_zerodiff(zerodiff, model_save_name, "zsl_VCS")
-        log_record = 'ZSL (VCS): %.4f' % (acc)
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        # Train ZSL classifier in VC
-        zsl_cls_VCS = classifier.CLASSIFIER(syn_feature_pro, util.map_label(syn_label_pro, data.unseenclasses), \
-                                            data, data.unseenclasses.size(0), opt.cuda, opt.classifier_lr, 0.5, 25,
-                                            opt.syn_num, cls_mode="ZSL", netDec=zerodiff.netDec, dec_size=opt.attSize,
-                                            dec_hidden_size=4096, useS=True, con_size=2048, _train_C = syn_con_pro,
-                                            useC=True)
-        acc = zsl_cls_VCS.acc
-        if best_zsl_acc_VCS < acc:
-            best_zsl_acc_VCS = acc
-            best_acc_zsl_list_VCS = zsl_cls_VCS.best_acc_zsl_list
-            save_zerodiff(zerodiff, model_save_name, "zsl_VCS")
-        log_record = 'ZSL pro (VCS): %.4f' % (acc)
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        # Train Seen classifier in V
-        seen_cls_V = classifier.CLASSIFIER(syn_feature_seen, util.map_label(syn_label_seen, data.seenclasses), \
-                                           data, data.seenclasses.size(0), opt.cuda, opt.classifier_lr, 0.5, 25,
-                                           opt.syn_num, cls_mode="seen")
-        acc = seen_cls_V.acc
-        if best_seen_acc_V < acc:
-            best_seen_acc_V = acc
-        log_record = 'Seen (V): %.4f' % (acc)
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        # reset G to training mode
         zerodiff.train()
-
-        if opt.gzsl:
-            log_record = "best GZSL (V): U: %.4f, S: %.4f, H: %.4f" % \
-                         (best_acc_unseen_V, best_acc_seen_V, best_gzsl_acc_V)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            log_record = "best_acc_seen_list (V): " + str(best_acc_seen_list_V)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            log_record = "best_acc_unseen_list (V): " + str(best_acc_unseen_list_V)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            log_record = "best GZSL (VS): U: %.4f, S: %.4f, H: %.4f" % \
-                         (best_acc_unseen_VS, best_acc_seen_VS, best_gzsl_acc_VS)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            log_record = "best_acc_seen_list (VS): " + str(best_acc_seen_list_VS)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            log_record = "best_acc_unseen_list (VS): " + str(best_acc_unseen_list_VS)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            log_record = "best GZSL (C): U: %.4f, S: %.4f, H: %.4f" % \
-                         (best_acc_unseen_C, best_acc_seen_C, best_gzsl_acc_C)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            log_record = "best_acc_seen_list (C): " + str(best_acc_seen_list_C)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            log_record = "best_acc_unseen_list (C): " + str(best_acc_unseen_list_C)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            log_record = "best GZSL (VC): U: %.4f, S: %.4f, H: %.4f" % \
-                         (best_acc_unseen_VC, best_acc_seen_VC, best_gzsl_acc_VC)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            log_record = "best_acc_seen_list (VC): " + str(best_acc_seen_list_VC)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            log_record = "best_acc_unseen_list (VC): " + str(best_acc_unseen_list_VC)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            log_record = "best GZSL (VCS): U: %.4f, S: %.4f, H: %.4f" % \
-                         (best_acc_unseen_VCS, best_acc_seen_VCS, best_gzsl_acc_VCS)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            log_record = "best_acc_seen_list (VCS): " + str(best_acc_seen_list_VCS)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-            log_record = "best_acc_unseen_list (VCS): " + str(best_acc_unseen_list_VCS)
-            print(log_record)
-            logger.write(log_record + '\n')
-
-        log_record = 'best ZSL (V): %.4f' % (best_zsl_acc_V.item())
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        log_record = "best_acc_zsl_list (V): " + str(best_acc_zsl_list_V)
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        log_record = 'best ZSL (VS): %.4f' % (best_zsl_acc_VS.item())
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        log_record = "best_acc_zsl_list (VS): " + str(best_acc_zsl_list_VS)
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        log_record = 'best ZSL (C): %.4f' % (best_zsl_acc_C.item())
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        log_record = "best_acc_zsl_list (C): " + str(best_acc_zsl_list_C)
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        log_record = 'best ZSL (VC): %.4f' % (best_zsl_acc_VC.item())
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        log_record = "best_acc_zsl_list (VC): " + str(best_acc_zsl_list_VC)
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        log_record = 'best ZSL (VCS): %.4f' % (best_zsl_acc_VCS.item())
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        log_record = "best_acc_zsl_list (VCS): " + str(best_acc_zsl_list_VCS)
-        print(log_record)
-        logger.write(log_record + '\n')
-
-        log_record = 'best seen (V): %.4f' % (best_seen_acc_V.item())
-        print(log_record)
-        logger.write(log_record + '\n')
+        log_best_eval_summary(best_eval_state, best_seen_acc_V)
 
 
 
