@@ -209,6 +209,7 @@ def save_zerodiff(zerodiff, save_name, post):
     torch.save({'state_dict_G': zerodiff.netG.state_dict(),
                 'state_dict_Dec': zerodiff.netDec.state_dict(),
                 'state_dict_RelProj': zerodiff.netRelProj.state_dict(),
+                'state_dict_CTeacherEmbed': zerodiff.netCTeacherEmbed.state_dict(),
                 'state_dict_D_x0': zerodiff.netD_x0.state_dict(),
                 'state_dict_D_xt': zerodiff.netD_xt.state_dict(),
                 'state_dict_D_xc': zerodiff.netD_xc.state_dict(),
@@ -238,11 +239,13 @@ class ZERODIFF(torch.nn.Module):
         self.netD_xc = zerodiff_tools.DFG_Discriminator_xc(opt).to(self.device)
         self.netDec = zerodiff_tools.V2S_mapping(opt, opt.attSize).to(self.device)
         self.netRelProj = zerodiff_tools.RelationProjector(opt.resSize, opt.rel_proj_dim).to(self.device)
+        self.netCTeacherEmbed = zerodiff_tools.RelationProjector(2048, opt.rel_proj_dim).to(self.device)
 
         self.optimizerE = optim.Adam(self.netE.parameters(), lr=opt.lr)
         self.optimizerG = optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
         self.optimizerDec = optim.Adam(self.netDec.parameters(), lr=opt.dec_lr, betas=(opt.beta1, 0.999))
         self.optimizerRelProj = optim.Adam(self.netRelProj.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
+        self.optimizerCTeacherEmbed = optim.Adam(self.netCTeacherEmbed.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
         self.optimizerD_x0 = optim.Adam(self.netD_x0.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
         self.optimizerD_xt = optim.Adam(self.netD_xt.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
         self.optimizerD_xc = optim.Adam(self.netD_xc.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
@@ -291,24 +294,22 @@ class ZERODIFF(torch.nn.Module):
         self.interval_recorder_sum['criticD_test_real_xt'] = 0.0
         self.interval_recorder_sum['criticD_test_real_xc'] = 0.0
 
-    def get_vsra_teacher_features(self, att_0_real, con_0_real):
+    def get_vsra_teacher_features(self, att_0_real, c_teacher):
         teacher_features = []
 
         if self.rel_sem_weight > 0:
             teacher_features.append((self.rel_sem_weight, att_0_real.detach()))
 
-        if self.rel_con_weight > 0:
-            with torch.no_grad():
-                con_teacher = self.netD_xc.con_emb_layers(con_0_real)
-            teacher_features.append((self.rel_con_weight, con_teacher.detach()))
+        if self.rel_con_weight > 0 and c_teacher is not None:
+            teacher_features.append((self.rel_con_weight, c_teacher.detach()))
 
         return teacher_features
 
-    def compute_vsra_losses(self, student_features, att_0_real, con_0_real):
+    def compute_vsra_losses(self, student_features, att_0_real, c_teacher):
         vsra_distance_loss = torch.tensor(0.0, device=self.device)
         vsra_angle_loss = torch.tensor(0.0, device=self.device)
 
-        for teacher_weight, teacher_features in self.get_vsra_teacher_features(att_0_real, con_0_real):
+        for teacher_weight, teacher_features in self.get_vsra_teacher_features(att_0_real, c_teacher):
             vsra_distance_loss += teacher_weight * rkd_distance_loss(student_features, teacher_features, self.rel_eps)
             if self.rel_use_angle:
                 vsra_angle_loss += teacher_weight * rkd_angle_loss(
@@ -323,29 +324,70 @@ class ZERODIFF(torch.nn.Module):
         vsra_loss = vsra_distance_loss + vsra_angle_loss
         return vsra_distance_loss, vsra_angle_loss, vsra_loss
 
-    def update_relation_embedding(self, x_0_real, att_0_real, con_0_real):
+    def compute_semantic_anchor_losses(self, student_features, att_0_real):
+        anchor_distance_loss = rkd_distance_loss(student_features, att_0_real.detach(), self.rel_eps)
+        anchor_angle_loss = torch.tensor(0.0, device=self.device)
+        if self.rel_use_angle:
+            anchor_angle_loss = rkd_angle_loss(
+                student_features,
+                att_0_real.detach(),
+                self.rel_eps,
+                self.rel_angle_max_samples,
+            )
+
+        anchor_distance_loss = self.rel_dist_ratio * anchor_distance_loss
+        anchor_angle_loss = self.rel_angle_ratio * anchor_angle_loss
+        anchor_loss = anchor_distance_loss + anchor_angle_loss
+        return anchor_distance_loss, anchor_angle_loss, anchor_loss
+
+    def build_relation_teacher(self, att_0_real):
+        with torch.no_grad():
+            n_sample = att_0_real.shape[0]
+            z_con = torch.randn(n_sample, self.dim_noise).to(self.device)
+            _ts_con = (self.n_T - 1) + torch.zeros((n_sample,), dtype=torch.int64).to(self.device)
+            r_tp1 = torch.randn(n_sample, 2048).to(self.device)
+            r_0_teacher = self.netR(z_con, att_0_real, r_tp1, _ts_con)
+        return r_0_teacher.detach()
+
+    def update_relation_embedding(self, x_0_real, att_0_real):
         real_vsra_distance_loss = torch.tensor(0.0, device=self.device)
         real_vsra_angle_loss = torch.tensor(0.0, device=self.device)
         real_vsra_loss = torch.tensor(0.0, device=self.device)
+        c_teacher = None
         if self.gamma_rel <= 0:
-            return real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss
+            return real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss, c_teacher
 
         for p in self.netRelProj.parameters():
             p.requires_grad = True
+        for p in self.netCTeacherEmbed.parameters():
+            p.requires_grad = True
 
         self.netRelProj.zero_grad()
+        self.netCTeacherEmbed.zero_grad()
         self.optimizerRelProj.zero_grad()
+        self.optimizerCTeacherEmbed.zero_grad()
+
+        r_0_teacher = self.build_relation_teacher(att_0_real)
+        c_teacher = self.netCTeacherEmbed(r_0_teacher)
         q_0_real = self.netRelProj(x_0_real)
         real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss = self.compute_vsra_losses(
             q_0_real,
             att_0_real,
-            con_0_real,
+            c_teacher,
         )
+        c_anchor_distance_loss, c_anchor_angle_loss, _ = self.compute_semantic_anchor_losses(c_teacher, att_0_real)
+        real_vsra_distance_loss = real_vsra_distance_loss + c_anchor_distance_loss
+        real_vsra_angle_loss = real_vsra_angle_loss + c_anchor_angle_loss
+        real_vsra_loss = real_vsra_distance_loss + real_vsra_angle_loss
         (self.gamma_rel * real_vsra_loss).backward()
         self.optimizerRelProj.step()
-        return real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss
+        self.optimizerCTeacherEmbed.step()
 
-    def compute_generator_vsra_losses(self, x_0_fake, att_0_real, con_0_real):
+        with torch.no_grad():
+            c_teacher = self.netCTeacherEmbed(r_0_teacher).detach()
+        return real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss, c_teacher
+
+    def compute_generator_vsra_losses(self, x_0_fake, att_0_real, c_teacher):
         vsra_distance_loss = torch.tensor(0.0, device=self.device)
         vsra_angle_loss = torch.tensor(0.0, device=self.device)
         vsra_loss = torch.tensor(0.0, device=self.device)
@@ -353,7 +395,7 @@ class ZERODIFF(torch.nn.Module):
             return vsra_distance_loss, vsra_angle_loss, vsra_loss
 
         q_0_fake = self.netRelProj(x_0_fake)
-        return self.compute_vsra_losses(q_0_fake, att_0_real, con_0_real)
+        return self.compute_vsra_losses(q_0_fake, att_0_real, c_teacher)
 
     def forward(self):
         gp_sum = 0  # lAMBDA VARIABLE
@@ -375,6 +417,8 @@ class ZERODIFF(torch.nn.Module):
         for p in self.netG.parameters():
             p.requires_grad = False
         for p in self.netRelProj.parameters():
+            p.requires_grad = False
+        for p in self.netCTeacherEmbed.parameters():
             p.requires_grad = False
         for p in self.netD_x0.parameters():
             p.requires_grad = True
@@ -477,11 +521,11 @@ class ZERODIFF(torch.nn.Module):
         real_vsra_distance_loss = torch.tensor(0.0, device=self.device)
         real_vsra_angle_loss = torch.tensor(0.0, device=self.device)
         real_vsra_loss = torch.tensor(0.0, device=self.device)
+        c_teacher = None
         if self.gamma_rel > 0:
-            real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss = self.update_relation_embedding(
+            real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss, c_teacher = self.update_relation_embedding(
                 x_0_real,
                 att_0_real,
-                con_0_real,
             )
 
         for p in self.netE.parameters():
@@ -489,6 +533,8 @@ class ZERODIFF(torch.nn.Module):
         for p in self.netG.parameters():
             p.requires_grad = True
         for p in self.netRelProj.parameters():
+            p.requires_grad = False
+        for p in self.netCTeacherEmbed.parameters():
             p.requires_grad = False
         for p in self.netD_x0.parameters():  # freeze discrimator
             p.requires_grad = False
@@ -531,7 +577,7 @@ class ZERODIFF(torch.nn.Module):
         vsra_distance_loss, vsra_angle_loss, vsra_loss = self.compute_generator_vsra_losses(
             x_0_fake,
             att_0_real,
-            con_0_real,
+            c_teacher,
         )
         errG += self.gamma_rel * vsra_loss
 

@@ -190,7 +190,8 @@ DFG 脚本内部会通过 `--netR_model_path` 指向前一步 DRG 产生的权�
 - 再在同一个 generator phase 内，让生成的 `V_fake` 进入这个已经定义好的关系空间
 - `VSRA` 当前只使用两个 teacher：类级语义 `S` 和对比特征 `C`
 - `real-V teacher` 已被移除，真实视觉特征的作用改为定义关系空间本身
-- 当前 `C teacher` 仍暂时复用 `DFG_Discriminator_xc` 内部的嵌入层，因此还不是完全独立的 teacher encoder
+- 当前 `C teacher` 会复用冻结的 `DRG` 生成器得到实例级语义载体 `r_0_teacher`，再通过独立的 `netCTeacherEmbed` 映到关系空间
+- 真实阶段额外加入了 `RKD(c_teacher, S)` 作为最小锚点，用来防止 `C teacher` 在纯关系监督下漂移
 
 ## 4. 训练过程中会自动完成什么
 
