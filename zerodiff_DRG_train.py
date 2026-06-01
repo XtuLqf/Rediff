@@ -3,15 +3,12 @@
 from __future__ import print_function
 import random
 import torch
-import torch.autograd as autograd
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
-from torch.autograd import Variable
 # import functions
 import datasets.image_util as util
 from config_zerodiff import opt
 import zerodiff_tools
-import torch.nn.functional as F
 import classifiers.classifier_images as classifier
 import os
 
@@ -31,6 +28,15 @@ class Logger(object):
         f = open(self.filename + '.log', "a")
         f.write(message)
         f.close()
+
+
+def log_message(message):
+    print(message)
+    logger.write(message + '\n')
+
+
+def as_scalar(value):
+    return value.item() if torch.is_tensor(value) else value
 
 for folder in ("./log", "./out", f"./log/{opt.dataset}", f"./out/{opt.dataset}"):
     os.makedirs(folder, exist_ok=True)
@@ -64,21 +70,13 @@ input_res = torch.FloatTensor(opt.batch_size, opt.resSize)
 input_con = torch.FloatTensor(opt.batch_size, 2048)
 input_att = torch.FloatTensor(opt.batch_size, opt.attSize)  # attSize class-embedding size
 input_label = torch.LongTensor(opt.batch_size)
-noise = torch.FloatTensor(opt.batch_size, opt.noiseSize)
 ##########
 # Cuda
 if opt.cuda:
     input_res = input_res.cuda()
-    noise, input_att = noise.cuda(), input_att.cuda()
+    input_att = input_att.cuda()
     input_label = input_label.cuda()
     input_con = input_con.cuda()
-
-
-def loss_fn(recon_x, x, mean, log_var):
-    BCE = torch.nn.functional.binary_cross_entropy(recon_x + 1e-12, x.detach(), size_average=False)
-    BCE = BCE.sum() / x.size(0)
-    KLD = -0.5 * torch.sum(1 + log_var - mean.pow(2) - log_var.exp()) / x.size(0)
-    return (BCE + KLD)
 
 
 def sample(batch_size):
@@ -100,7 +98,6 @@ def WeightedL14att(pred, gt):
 def generate_syn_feature(ddpmgan, classes, attribute, num):
     nclass = classes.size(0)
     syn_feature = torch.FloatTensor(nclass * num, opt.resSize)
-    syn_feature_con = torch.FloatTensor(nclass * num, 2048)
     syn_label = torch.LongTensor(nclass * num)
     syn_att = torch.FloatTensor(num, opt.attSize)
     if opt.cuda:
@@ -155,13 +152,13 @@ class ZERODIFF_DRG(torch.nn.Module):
 
     def forward(self):
         for iter_d in range(opt.critic_iter):
-            _, r_0_real, att_0_real, label = sample(self.batch_size)
-            D_cost, Wasserstein_D = self.update_D(r_0_real, att_0_real, label)
-        G_cost, loss_att_mse = self.update_G(r_0_real, att_0_real, label)
+            _, r_0_real, att_0_real, _ = sample(self.batch_size)
+            D_cost, Wasserstein_D = self.update_D(r_0_real, att_0_real)
+        G_cost, loss_att_mse = self.update_G(r_0_real, att_0_real)
 
         return D_cost, Wasserstein_D, G_cost, loss_att_mse
 
-    def update_D(self, r_0_real, att_0_real, label):
+    def update_D(self, r_0_real, att_0_real):
         for p in self.netD_r0.parameters():
             p.requires_grad = True
         for p in self.netD_rt.parameters():
@@ -184,10 +181,7 @@ class ZERODIFF_DRG(torch.nn.Module):
         _ts_con = torch.randint(0, self.n_T, (self.batch_size,), dtype=torch.int64).to(self.device)
         r_t_real, r_tp1_real, _ = self.q_sample_pairs(r_0_real, _ts_con)
 
-        if opt.dataset == "AWA2":
-            r_0_fake = self.netR(z, att_0_real, r_t_real, _ts_con)
-        else:
-            r_0_fake = self.netR(z, att_0_real, r_t_real, _ts_con)
+        r_0_fake = self.netR(z, att_0_real, r_t_real, _ts_con)
         # NOTE!!!:
         # The true code should be "r_0_fake = self.netR(z, att_0_real, r_tp1_real, _ts_con)"
         # If that, however, the performance deceases significantly.
@@ -220,7 +214,7 @@ class ZERODIFF_DRG(torch.nn.Module):
 
         return D_cost, Wasserstein_D
 
-    def update_G(self, r_0_real, att_0_real, label):
+    def update_G(self, r_0_real, att_0_real):
         for p in self.netR.parameters():
             p.requires_grad = True
         for p in self.netD_r0.parameters():
@@ -237,10 +231,7 @@ class ZERODIFF_DRG(torch.nn.Module):
         _ts_con = torch.randint(0, self.n_T, (self.batch_size,), dtype=torch.int64).to(self.device)
         r_t_real, r_tp1_real, _ = self.q_sample_pairs(r_0_real, _ts_con)
 
-        if opt.dataset == "AWA2":
-            r_0_fake = self.netR(z, att_0_real, r_t_real, _ts_con)
-        else:
-            r_0_fake = self.netR(z, att_0_real, r_t_real, _ts_con)
+        r_0_fake = self.netR(z, att_0_real, r_t_real, _ts_con)
         # NOTE!!!:
         # The true code should be "r_0_fake = self.netR(z, att_0_real, r_tp1_real, _ts_con)"
         # If that, however, the performance deceases significantly.
@@ -335,12 +326,6 @@ best_acc_unseen_C = 0
 best_zsl_acc_C = 0
 best_seen_acc_C = 0
 
-best_gzsl_acc_C = 0
-best_acc_seen_C = 0
-best_acc_unseen_C = 0
-best_zsl_acc_C = 0
-best_seen_acc_C = 0
-
 nclass = opt.nclass_all
 
 # data.train_feature, data.test_seen_feature, data.test_unseen_feature = data.train_paco, data.test_seen_paco, data.test_unseen_paco
@@ -349,27 +334,32 @@ for epoch in range(0, opt.nepoch):
     for i in range(0, data.ntrain, opt.batch_size):
         D_cost, Wasserstein_D, G_cost, loss_att_mse = zerodiff_drg()
 
-    log_record = '[%d/%d] D_cost:%.4f, Wasserstein_D:%.4f' % (epoch, opt.nepoch, D_cost.item(), Wasserstein_D.item())
-    print(log_record)
-    logger.write(log_record + '\n')
+    log_message('[%d/%d] D_cost:%.4f, Wasserstein_D:%.4f' % (
+        epoch,
+        opt.nepoch,
+        as_scalar(D_cost),
+        as_scalar(Wasserstein_D),
+    ))
 
-    log_record = '[%d/%d] G_cost:%.4f, loss_att_mse:%.4f' % (
-    epoch, opt.nepoch, G_cost.item(), loss_att_mse.item())
-    print(log_record)
-    logger.write(log_record + '\n')
+    log_message('[%d/%d] G_cost:%.4f, loss_att_mse:%.4f' % (
+        epoch,
+        opt.nepoch,
+        as_scalar(G_cost),
+        as_scalar(loss_att_mse),
+    ))
 
     if epoch % opt.eval_interval == 0 or epoch == (opt.nepoch - 1):
         zerodiff_drg.eval()
         syn_unseen_con, syn_unseen_label = generate_syn_feature(zerodiff_drg, data.unseenclasses, data.attribute, opt.syn_num)
         syn_seen_con, syn_seen_label = generate_syn_feature(zerodiff_drg, data.seenclasses, data.attribute, opt.syn_num)
         
-        syn_unseen_feat = syn_unseen_con.clone() # just a placehold in DRG train, not really used
-        syn_seen_feat = syn_seen_con.clone() # just a placehold in DRG train, not really used
+        syn_unseen_feat_placeholder = syn_unseen_con.clone()
+        syn_seen_feat_placeholder = syn_seen_con.clone()
 
         # Generalized zero-shot learning
         if opt.gzsl:
             # Concatenate real seen features with synthesized unseen features
-            train_X = torch.cat((data.train_feature.cpu(), syn_unseen_feat.cpu()), 0)
+            train_X = torch.cat((data.train_feature.cpu(), syn_unseen_feat_placeholder.cpu()), 0)
             train_Y = torch.cat((data.train_label, syn_unseen_label), 0)
             train_C = torch.cat((data.train_paco.cpu(), syn_unseen_con.cpu()), 0)
             
@@ -379,51 +369,45 @@ for epoch in range(0, opt.nepoch):
             if best_gzsl_acc_C < gzsl_cls_C.H:
                 best_acc_seen_C, best_acc_unseen_C, best_gzsl_acc_C = gzsl_cls_C.acc_seen, gzsl_cls_C.acc_unseen, gzsl_cls_C.H
                 save_model(zerodiff_drg.netR, model_save_name, '_gzsl')
-            log_record = 'GZSL (C): U: %.4f, S: %.4f, H: %.4f' % (
-            gzsl_cls_C.acc_unseen, gzsl_cls_C.acc_seen, gzsl_cls_C.H)
-            print(log_record)
-            logger.write(log_record + '\n')
+            log_message('GZSL (C): U: %.4f, S: %.4f, H: %.4f' % (
+                as_scalar(gzsl_cls_C.acc_unseen),
+                as_scalar(gzsl_cls_C.acc_seen),
+                as_scalar(gzsl_cls_C.H),
+            ))
 
         # Zero-shot learning
         # Train ZSL classifier
-        zsl_cls_C = classifier.CLASSIFIER(syn_unseen_feat.cpu(), util.map_label(syn_unseen_label, data.unseenclasses),
+        zsl_cls_C = classifier.CLASSIFIER(syn_unseen_feat_placeholder.cpu(), util.map_label(syn_unseen_label, data.unseenclasses),
                                           data, data.unseenclasses.size(0), opt.cuda, opt.classifier_lr, 0.5, \
                                           25, opt.syn_num, cls_mode="ZSL", con_size=2048, _train_C=syn_unseen_con, useV=False, useC=True)
         acc = zsl_cls_C.acc
         if best_zsl_acc_C < acc:
             best_zsl_acc_C = acc
             save_model(zerodiff_drg.netR, model_save_name, '_zsl')
-        log_record = 'ZSL (C): %.4f' % (acc)
-        print(log_record)
-        logger.write(log_record + '\n')
+        log_message('ZSL (C): %.4f' % as_scalar(acc))
 
         # Train Seen classifier
-        seen_cls_C = classifier.CLASSIFIER(syn_seen_feat.cpu(), util.map_label(syn_seen_label, data.seenclasses), data,
+        seen_cls_C = classifier.CLASSIFIER(syn_seen_feat_placeholder.cpu(), util.map_label(syn_seen_label, data.seenclasses), data,
                                            data.seenclasses.size(0), opt.cuda, opt.classifier_lr, 0.5, \
                                            25, opt.syn_num, cls_mode="seen", con_size=2048, _train_C=syn_seen_con, useV=False, useC=True)
         acc = seen_cls_C.acc
         if best_seen_acc_C < acc:
             best_seen_acc_C = acc
-        log_record = 'Seen (C): %.4f' % (acc)
-        print(log_record)
-        logger.write(log_record + '\n')
+        log_message('Seen (C): %.4f' % as_scalar(acc))
 
         # reset G to training mode
         zerodiff_drg.train()
 
         if opt.gzsl:
-            log_record = "best GZSL (C): U: %.4f, S: %.4f, H: %.4f" % \
-                         (best_acc_unseen_C, best_acc_seen_C, best_gzsl_acc_C)
-            print(log_record)
-            logger.write(log_record + '\n')
+            log_message("best GZSL (C): U: %.4f, S: %.4f, H: %.4f" % (
+                as_scalar(best_acc_unseen_C),
+                as_scalar(best_acc_seen_C),
+                as_scalar(best_gzsl_acc_C),
+            ))
 
-        log_record = 'best ZSL (C): %.4f' % (best_zsl_acc_C.item())
-        print(log_record)
-        logger.write(log_record + '\n')
+        log_message('best ZSL (C): %.4f' % as_scalar(best_zsl_acc_C))
 
-        log_record = 'best seen (C): %.4f' % (best_seen_acc_C.item())
-        print(log_record)
-        logger.write(log_record + '\n')
+        log_message('best seen (C): %.4f' % as_scalar(best_seen_acc_C))
 
 
 

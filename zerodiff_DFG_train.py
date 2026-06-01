@@ -3,7 +3,6 @@
 from __future__ import print_function
 import random
 import torch
-import torch.autograd as autograd
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
 # import functions
@@ -12,9 +11,6 @@ import classifiers.classifier_images as classifier
 from config_zerodiff import opt
 import zerodiff_tools
 import torch.nn.functional as F
-from sklearn import preprocessing
-import numpy as np
-import torch.nn as nn
 import os
 
 class Logger(object):
@@ -28,12 +24,8 @@ class Logger(object):
         f.write(message)
         f.close()
 
-folder_name = "./log"
-os.makedirs(folder_name, exist_ok=True)
-folder_name = "./out"
-os.makedirs(folder_name, exist_ok=True)
-os.makedirs(f"./log/{opt.dataset}", exist_ok=True)
-os.makedirs(f"./out/{opt.dataset}", exist_ok=True)
+for folder in ("./log", "./out", f"./log/{opt.dataset}", f"./out/{opt.dataset}"):
+    os.makedirs(folder, exist_ok=True)
 
 logger_name = "./log/%s/train_zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_rel:%.1f_rd:%.1f_ra:%.1f_ang:%d_f:%.1f_rc:%.1f_rp:%d_num:%s" % (
     opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
@@ -75,7 +67,7 @@ input_con = torch.FloatTensor(opt.batch_size, 2048)
 input_att = torch.FloatTensor(opt.batch_size, opt.attSize)  # attSize class-embedding size
 input_label = torch.LongTensor(opt.batch_size)  # attSize class-embedding size
 input_test_res = torch.FloatTensor(opt.batch_size, opt.resSize)
-input_test_con = torch.FloatTensor(opt.batch_size, opt.resSize)
+input_test_con = torch.FloatTensor(opt.batch_size, 2048)
 input_test_att = torch.FloatTensor(opt.batch_size, opt.attSize)
 ##########
 # Cuda
@@ -196,16 +188,16 @@ def save_zerodiff(zerodiff, save_name, post):
     torch.save({'state_dict_E': zerodiff.netE.state_dict(),
                 'state_dict_G': zerodiff.netG.state_dict(),
                 'state_dict_Dec': zerodiff.netDec.state_dict(),
-                'state_dict_RelProj': zerodiff.netRelProj.state_dict(),
-                'state_dict_CTeacherEmbed': zerodiff.netCTeacherEmbed.state_dict(),
+                'state_dict_VSRARelHead': zerodiff.netVSRARelHead.state_dict(),
+                'state_dict_VSRACHead': zerodiff.netVSRACHead.state_dict(),
                 'state_dict_D_x0': zerodiff.netD_x0.state_dict(),
                 'state_dict_D_xt': zerodiff.netD_xt.state_dict(),
                 'state_dict_D_xc': zerodiff.netD_xc.state_dict(),
                 'optimizer_E': zerodiff.optimizerE.state_dict(),
                 'optimizer_G': zerodiff.optimizerG.state_dict(),
                 'optimizer_Dec': zerodiff.optimizerDec.state_dict(),
-                'optimizer_RelProj': zerodiff.optimizerRelProj.state_dict(),
-                'optimizer_CTeacherEmbed': zerodiff.optimizerCTeacherEmbed.state_dict(),
+                'optimizer_VSRARelHead': zerodiff.optimizerVSRARelHead.state_dict(),
+                'optimizer_VSRACHead': zerodiff.optimizerVSRACHead.state_dict(),
                 'optimizer_D_x0': zerodiff.optimizerD_x0.state_dict(),
                 'optimizer_D_xt': zerodiff.optimizerD_xt.state_dict(),
                 'optimizer_D_xc': zerodiff.optimizerD_xc.state_dict(),
@@ -226,27 +218,35 @@ def load_zerodiff(zerodiff, checkpoint_path, load_optimizers=True):
     zerodiff.netD_xt.load_state_dict(checkpoint['state_dict_D_xt'])
     zerodiff.netD_xc.load_state_dict(checkpoint['state_dict_D_xc'])
 
-    rel_proj_state = checkpoint.get('state_dict_RelProj')
-    if rel_proj_state is not None:
-        zerodiff.netRelProj.load_state_dict(rel_proj_state)
+    vsra_rel_head_state = checkpoint.get('state_dict_VSRARelHead')
+    if vsra_rel_head_state is None:
+        vsra_rel_head_state = checkpoint.get('state_dict_RelProj')
+    if vsra_rel_head_state is not None:
+        zerodiff.netVSRARelHead.load_state_dict(vsra_rel_head_state)
 
-    c_teacher_state = checkpoint.get('state_dict_CTeacherEmbed')
-    if c_teacher_state is not None:
-        zerodiff.netCTeacherEmbed.load_state_dict(c_teacher_state)
+    vsra_c_head_state = checkpoint.get('state_dict_VSRACHead')
+    if vsra_c_head_state is None:
+        vsra_c_head_state = checkpoint.get('state_dict_CTeacherEmbed')
+    if vsra_c_head_state is not None:
+        zerodiff.netVSRACHead.load_state_dict(vsra_c_head_state)
 
     if load_optimizers:
         optimizer_pairs = (
             ('optimizer_E', zerodiff.optimizerE),
             ('optimizer_G', zerodiff.optimizerG),
             ('optimizer_Dec', zerodiff.optimizerDec),
-            ('optimizer_RelProj', zerodiff.optimizerRelProj),
-            ('optimizer_CTeacherEmbed', zerodiff.optimizerCTeacherEmbed),
+            ('optimizer_VSRARelHead', zerodiff.optimizerVSRARelHead),
+            ('optimizer_VSRACHead', zerodiff.optimizerVSRACHead),
             ('optimizer_D_x0', zerodiff.optimizerD_x0),
             ('optimizer_D_xt', zerodiff.optimizerD_xt),
             ('optimizer_D_xc', zerodiff.optimizerD_xc),
         )
         for key, optimizer in optimizer_pairs:
             state = checkpoint.get(key)
+            if state is None and key == 'optimizer_VSRARelHead':
+                state = checkpoint.get('optimizer_RelProj')
+            if state is None and key == 'optimizer_VSRACHead':
+                state = checkpoint.get('optimizer_CTeacherEmbed')
             if state is not None:
                 optimizer.load_state_dict(state)
 
@@ -469,14 +469,14 @@ class ZERODIFF(torch.nn.Module):
         self.netD_xt = zerodiff_tools.DFG_Discriminator_xt(opt).to(self.device)
         self.netD_xc = zerodiff_tools.DFG_Discriminator_xc(opt).to(self.device)
         self.netDec = zerodiff_tools.V2S_mapping(opt, opt.attSize).to(self.device)
-        self.netRelProj = zerodiff_tools.RelationProjector(opt.resSize, opt.rel_proj_dim).to(self.device)
-        self.netCTeacherEmbed = zerodiff_tools.RelationProjector(2048, opt.rel_proj_dim).to(self.device)
+        self.netVSRARelHead = zerodiff_tools.RelationProjector(opt.resSize, opt.rel_proj_dim).to(self.device)
+        self.netVSRACHead = zerodiff_tools.RelationProjector(2048, opt.rel_proj_dim).to(self.device)
 
         self.optimizerE = optim.Adam(self.netE.parameters(), lr=opt.lr)
         self.optimizerG = optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
         self.optimizerDec = optim.Adam(self.netDec.parameters(), lr=opt.dec_lr, betas=(opt.beta1, 0.999))
-        self.optimizerRelProj = optim.Adam(self.netRelProj.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
-        self.optimizerCTeacherEmbed = optim.Adam(self.netCTeacherEmbed.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
+        self.optimizerVSRARelHead = optim.Adam(self.netVSRARelHead.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
+        self.optimizerVSRACHead = optim.Adam(self.netVSRACHead.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
         self.optimizerD_x0 = optim.Adam(self.netD_x0.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
         self.optimizerD_xt = optim.Adam(self.netD_xt.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
         self.optimizerD_xc = optim.Adam(self.netD_xc.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
@@ -530,22 +530,22 @@ class ZERODIFF(torch.nn.Module):
         self.interval_recorder_sum['criticD_test_real_xt'] = 0.0
         self.interval_recorder_sum['criticD_test_real_xc'] = 0.0
 
-    def get_vsra_teacher_features(self, att_0_real, c_teacher):
+    def get_vsra_teacher_features(self, att_0_real, vsra_c_teacher):
         teacher_features = []
 
         if self.rel_sem_weight > 0:
             teacher_features.append((self.rel_sem_weight, att_0_real.detach()))
 
-        if self.rel_con_weight > 0 and c_teacher is not None:
-            teacher_features.append((self.rel_con_weight, c_teacher.detach()))
+        if self.rel_con_weight > 0 and vsra_c_teacher is not None:
+            teacher_features.append((self.rel_con_weight, vsra_c_teacher.detach()))
 
         return teacher_features
 
-    def compute_vsra_losses(self, student_features, att_0_real, c_teacher):
+    def compute_vsra_losses(self, student_features, att_0_real, vsra_c_teacher):
         vsra_distance_loss = torch.tensor(0.0, device=self.device)
         vsra_angle_loss = torch.tensor(0.0, device=self.device)
 
-        for teacher_weight, teacher_features in self.get_vsra_teacher_features(att_0_real, c_teacher):
+        for teacher_weight, teacher_features in self.get_vsra_teacher_features(att_0_real, vsra_c_teacher):
             vsra_distance_loss += teacher_weight * rkd_distance_loss(student_features, teacher_features, self.rel_eps)
             if self.rel_use_angle:
                 vsra_angle_loss += teacher_weight * rkd_angle_loss(
@@ -576,62 +576,55 @@ class ZERODIFF(torch.nn.Module):
         anchor_loss = anchor_distance_loss + anchor_angle_loss
         return anchor_distance_loss, anchor_angle_loss, anchor_loss
 
-    def build_relation_teacher(self, att_0_real, con_0_real):
-        with torch.no_grad():
-            n_sample = att_0_real.shape[0]
-            z_con = torch.randn(n_sample, self.dim_noise).to(self.device)
-            _ts_con = torch.randint(0, self.n_T, (n_sample,), dtype=torch.int64).to(self.device)
-            r_t_real, _, _ = self.q_sample_pairs(con_0_real, _ts_con)
-            r_0_teacher = self.netR(z_con, att_0_real, r_t_real, _ts_con)
-        return r_0_teacher.detach()
+    def build_train_vsra_c_teacher(self, con_0_real):
+        return self.netVSRACHead(con_0_real)
 
     def update_relation_embedding(self, x_0_real, att_0_real, con_0_real):
         real_vsra_distance_loss = torch.tensor(0.0, device=self.device)
         real_vsra_angle_loss = torch.tensor(0.0, device=self.device)
         real_vsra_loss = torch.tensor(0.0, device=self.device)
-        c_teacher = None
+        vsra_c_teacher = None
         if self.gamma_rel <= 0:
-            return real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss, c_teacher
+            return real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss, vsra_c_teacher
 
-        for p in self.netRelProj.parameters():
+        for p in self.netVSRARelHead.parameters():
             p.requires_grad = True
-        for p in self.netCTeacherEmbed.parameters():
+        for p in self.netVSRACHead.parameters():
             p.requires_grad = True
 
-        self.netRelProj.zero_grad()
-        self.netCTeacherEmbed.zero_grad()
-        self.optimizerRelProj.zero_grad()
-        self.optimizerCTeacherEmbed.zero_grad()
+        self.netVSRARelHead.zero_grad()
+        self.netVSRACHead.zero_grad()
+        self.optimizerVSRARelHead.zero_grad()
+        self.optimizerVSRACHead.zero_grad()
 
-        r_0_teacher = self.build_relation_teacher(att_0_real, con_0_real)
-        c_teacher = self.netCTeacherEmbed(r_0_teacher)
-        q_0_real = self.netRelProj(x_0_real)
+        vsra_c_teacher = self.build_train_vsra_c_teacher(con_0_real)
+        vsra_student_real = self.netVSRARelHead(x_0_real)
         real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss = self.compute_vsra_losses(
-            q_0_real,
+            vsra_student_real,
             att_0_real,
-            c_teacher,
+            vsra_c_teacher,
         )
-        c_anchor_distance_loss, c_anchor_angle_loss, _ = self.compute_semantic_anchor_losses(c_teacher, att_0_real)
+        c_anchor_distance_loss, c_anchor_angle_loss, _ = self.compute_semantic_anchor_losses(vsra_c_teacher, att_0_real)
         real_vsra_distance_loss = real_vsra_distance_loss + c_anchor_distance_loss
         real_vsra_angle_loss = real_vsra_angle_loss + c_anchor_angle_loss
         real_vsra_loss = real_vsra_distance_loss + real_vsra_angle_loss
         (self.gamma_rel * real_vsra_loss).backward()
-        self.optimizerRelProj.step()
-        self.optimizerCTeacherEmbed.step()
+        self.optimizerVSRARelHead.step()
+        self.optimizerVSRACHead.step()
 
         with torch.no_grad():
-            c_teacher = self.netCTeacherEmbed(r_0_teacher).detach()
-        return real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss, c_teacher
+            vsra_c_teacher = self.build_train_vsra_c_teacher(con_0_real).detach()
+        return real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss, vsra_c_teacher
 
-    def compute_generator_vsra_losses(self, x_0_fake, att_0_real, c_teacher):
+    def compute_generator_vsra_losses(self, x_0_fake, att_0_real, vsra_c_teacher):
         vsra_distance_loss = torch.tensor(0.0, device=self.device)
         vsra_angle_loss = torch.tensor(0.0, device=self.device)
         vsra_loss = torch.tensor(0.0, device=self.device)
         if self.gamma_rel <= 0:
             return vsra_distance_loss, vsra_angle_loss, vsra_loss
 
-        q_0_fake = self.netRelProj(x_0_fake)
-        return self.compute_vsra_losses(q_0_fake, att_0_real, c_teacher)
+        vsra_student_fake = self.netVSRARelHead(x_0_fake)
+        return self.compute_vsra_losses(vsra_student_fake, att_0_real, vsra_c_teacher)
 
     def forward(self):
         gp_sum = 0  # Running sum used for adaptive lambda scaling.
@@ -652,9 +645,9 @@ class ZERODIFF(torch.nn.Module):
             p.requires_grad = False
         for p in self.netG.parameters():
             p.requires_grad = False
-        for p in self.netRelProj.parameters():
+        for p in self.netVSRARelHead.parameters():
             p.requires_grad = False
-        for p in self.netCTeacherEmbed.parameters():
+        for p in self.netVSRACHead.parameters():
             p.requires_grad = False
         for p in self.netD_x0.parameters():
             p.requires_grad = True
@@ -757,9 +750,9 @@ class ZERODIFF(torch.nn.Module):
         real_vsra_distance_loss = torch.tensor(0.0, device=self.device)
         real_vsra_angle_loss = torch.tensor(0.0, device=self.device)
         real_vsra_loss = torch.tensor(0.0, device=self.device)
-        c_teacher = None
+        vsra_c_teacher = None
         if self.gamma_rel > 0:
-            real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss, c_teacher = self.update_relation_embedding(
+            real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss, vsra_c_teacher = self.update_relation_embedding(
                 x_0_real,
                 att_0_real,
                 con_0_real,
@@ -769,9 +762,9 @@ class ZERODIFF(torch.nn.Module):
             p.requires_grad = True
         for p in self.netG.parameters():
             p.requires_grad = True
-        for p in self.netRelProj.parameters():
+        for p in self.netVSRARelHead.parameters():
             p.requires_grad = False
-        for p in self.netCTeacherEmbed.parameters():
+        for p in self.netVSRACHead.parameters():
             p.requires_grad = False
         for p in self.netD_x0.parameters():  # freeze discrimator
             p.requires_grad = False
@@ -785,7 +778,7 @@ class ZERODIFF(torch.nn.Module):
 
         self.netE.zero_grad()
         self.netG.zero_grad()
-        self.netRelProj.zero_grad()
+        self.netVSRARelHead.zero_grad()
 
         z, means, log_var = self.netE(x_0_real, att_0_real)
 
@@ -814,7 +807,7 @@ class ZERODIFF(torch.nn.Module):
         vsra_distance_loss, vsra_angle_loss, vsra_loss = self.compute_generator_vsra_losses(
             x_0_fake,
             att_0_real,
-            c_teacher,
+            vsra_c_teacher,
         )
         errG += self.gamma_rel * vsra_loss
 
