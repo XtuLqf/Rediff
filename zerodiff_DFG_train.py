@@ -80,9 +80,9 @@ if opt.cuda:
 
 
 def loss_fn(recon_x, x, mean, log_var):
-    Recon = torch.nn.functional.binary_cross_entropy(recon_x + 1e-12, x.detach(), size_average=False)
+    Recon = torch.nn.functional.binary_cross_entropy(recon_x + 1e-12, x.detach(), reduction='sum')
     Recon = Recon.sum() / x.size(0)
-    # Recon = torch.nn.functional.mse_loss(recon_x, x.detach(), size_average=False)
+    # Recon = torch.nn.functional.mse_loss(recon_x, x.detach(), reduction='sum')
     # Recon = Recon.sum() / x.size(0)
     KLD = -0.5 * torch.sum(1 + log_var - mean.pow(2) - log_var.exp()) / x.size(0)
     return (Recon + KLD)
@@ -193,15 +193,9 @@ def save_zerodiff(zerodiff, save_name, post):
                 'state_dict_D_x0': zerodiff.netD_x0.state_dict(),
                 'state_dict_D_xt': zerodiff.netD_xt.state_dict(),
                 'state_dict_D_xc': zerodiff.netD_xc.state_dict(),
-                'optimizer_E': zerodiff.optimizerE.state_dict(),
-                'optimizer_G': zerodiff.optimizerG.state_dict(),
-                'optimizer_Dec': zerodiff.optimizerDec.state_dict(),
-                'optimizer_VSRARelHead': zerodiff.optimizerVSRARelHead.state_dict(),
-                'optimizer_VSRACHead': zerodiff.optimizerVSRACHead.state_dict(),
-                'optimizer_D_x0': zerodiff.optimizerD_x0.state_dict(),
-                'optimizer_D_xt': zerodiff.optimizerD_xt.state_dict(),
-                'optimizer_D_xc': zerodiff.optimizerD_xc.state_dict(),
                 'lambda1': zerodiff.lambda1,
+                'checkpoint_type': 'dfg_weights',
+                'save_postfix': post,
                 }, save_name + post + '.tar')
 
 
@@ -297,16 +291,12 @@ def get_eval_modality_configs(zerodiff):
     return {
         'V': {
             'classifier_kwargs': {},
-            'gzsl_postfixes': ('gzsl_V',),
-            'zsl_postfixes': ('zsl_V',),
         },
         'VS': {
             'classifier_kwargs': {
                 **decoder_kwargs,
                 'useS': True,
             },
-            'gzsl_postfixes': ('gzsl_VS',),
-            'zsl_postfixes': ('zsl_VS',),
         },
         'C': {
             'classifier_kwargs': {
@@ -314,16 +304,12 @@ def get_eval_modality_configs(zerodiff):
                 'useC': True,
                 'con_size': 2048,
             },
-            'gzsl_postfixes': ('gzsl_C',),
-            'zsl_postfixes': ('zsl_C',),
         },
         'VC': {
             'classifier_kwargs': {
                 'useC': True,
                 'con_size': 2048,
             },
-            'gzsl_postfixes': ('gzsl_VC',),
-            'zsl_postfixes': ('zsl_VC',),
         },
         'VCS': {
             'classifier_kwargs': {
@@ -332,8 +318,6 @@ def get_eval_modality_configs(zerodiff):
                 'useC': True,
                 'con_size': 2048,
             },
-            'gzsl_postfixes': ('gzsl_VCS',),
-            'zsl_postfixes': ('zsl_VCS',),
         },
     }
 
@@ -362,7 +346,7 @@ def run_classifier(train_feature, train_label, data_loader, nclass, cls_mode, mo
     )
 
 
-def update_best_gzsl(best_eval_state, modality_name, cls_result, zerodiff, save_name, save_postfixes):
+def update_best_gzsl(best_eval_state, modality_name, cls_result):
     best_metrics = best_eval_state[modality_name]['gzsl']
     if best_metrics['H'] < cls_result.H:
         best_metrics['seen'] = cls_result.acc_seen
@@ -370,17 +354,13 @@ def update_best_gzsl(best_eval_state, modality_name, cls_result, zerodiff, save_
         best_metrics['H'] = cls_result.H
         best_metrics['seen_list'] = cls_result.best_acc_S_list
         best_metrics['unseen_list'] = cls_result.best_acc_U_list
-        for save_postfix in save_postfixes:
-            save_zerodiff(zerodiff, save_name, save_postfix)
 
 
-def update_best_zsl(best_eval_state, modality_name, cls_result, zerodiff, save_name, save_postfixes):
+def update_best_zsl(best_eval_state, modality_name, cls_result):
     best_metrics = best_eval_state[modality_name]['zsl']
     if best_metrics['acc'] < cls_result.acc:
         best_metrics['acc'] = cls_result.acc
         best_metrics['acc_list'] = cls_result.best_acc_zsl_list
-        for save_postfix in save_postfixes:
-            save_zerodiff(zerodiff, save_name, save_postfix)
 
 
 def log_gzsl_result(prefix, cls_result):
@@ -403,14 +383,14 @@ def build_eval_variants(data_loader, syn_feature, syn_con, syn_label, syn_featur
             'syn_feature': syn_feature,
             'syn_con': syn_con,
             'syn_label': syn_label,
-            'extra_gzsl_postfixes': {},
+            'is_progressive': False,
         },
         {
             'log_suffix': ' pro',
             'syn_feature': syn_feature_pro,
             'syn_con': syn_con_pro,
             'syn_label': syn_label_pro,
-            'extra_gzsl_postfixes': {'VCS': ('gzsl',)},
+            'is_progressive': True,
         },
     ]
 
@@ -426,7 +406,7 @@ def build_eval_variants(data_loader, syn_feature, syn_con, syn_label, syn_featur
     return eval_variants
 
 
-def log_best_eval_summary(best_eval_state, best_seen_acc_v):
+def log_best_eval_summary(best_eval_state, best_seen_acc_v, best_main_gzsl_h):
     if opt.gzsl:
         for modality_name in MODALITY_ORDER:
             gzsl_metrics = best_eval_state[modality_name]['gzsl']
@@ -445,6 +425,8 @@ def log_best_eval_summary(best_eval_state, best_seen_acc_v):
         log_message('best_acc_zsl_list (%s): %s' % (modality_name, zsl_metrics['acc_list']))
 
     log_message('best seen (V): %.4f' % as_scalar(best_seen_acc_v))
+    if opt.gzsl:
+        log_message('best saved DFG checkpoint (GZSL pro VCS): %.4f' % as_scalar(best_main_gzsl_h))
 
 
 class ZERODIFF(torch.nn.Module):
@@ -498,7 +480,7 @@ class ZERODIFF(torch.nn.Module):
         self.rel_angle_max_samples = opt.rel_angle_max_samples
         self.rel_use_angle = opt.rel_use_angle
 
-        self.loss_mse = torch.nn.MSELoss(reduce=False)
+        self.loss_mse = torch.nn.MSELoss(reduction='none')
 
         self.batch_size = opt.batch_size
         self.data = data
@@ -906,6 +888,7 @@ zerodiff.train()
 modality_configs = get_eval_modality_configs(zerodiff)
 best_eval_state = init_best_eval_state()
 best_seen_acc_V = 0.0
+best_main_gzsl_H = 0.0
 
 
 n_iter = get_train_steps_per_epoch(data)
@@ -973,7 +956,6 @@ for epoch in range(0, opt.nepoch):
             for eval_variant in eval_variants:
                 for modality_name in MODALITY_ORDER:
                     modality_config = modality_configs[modality_name]
-                    save_postfixes = modality_config['gzsl_postfixes'] + eval_variant['extra_gzsl_postfixes'].get(modality_name, ())
                     gzsl_cls = run_classifier(
                         eval_variant['train_X'],
                         eval_variant['train_Y'],
@@ -987,10 +969,11 @@ for epoch in range(0, opt.nepoch):
                         best_eval_state,
                         modality_name,
                         gzsl_cls,
-                        zerodiff,
-                        model_save_name,
-                        save_postfixes,
                     )
+                    current_gzsl_h = as_scalar(gzsl_cls.H)
+                    if eval_variant['is_progressive'] and modality_name == 'VCS' and best_main_gzsl_H < current_gzsl_h:
+                        best_main_gzsl_H = current_gzsl_h
+                        save_zerodiff(zerodiff, model_save_name, '_gzsl')
                     log_gzsl_result('GZSL%s (%s)' % (eval_variant['log_suffix'], modality_name), gzsl_cls)
 
         for eval_variant in eval_variants:
@@ -1010,14 +993,11 @@ for epoch in range(0, opt.nepoch):
                     best_eval_state,
                     modality_name,
                     zsl_cls,
-                    zerodiff,
-                    model_save_name,
-                    modality_config['zsl_postfixes'],
                 )
                 log_zsl_result('ZSL%s (%s)' % (eval_variant['log_suffix'], modality_name), zsl_cls.acc)
 
         zerodiff.train()
-        log_best_eval_summary(best_eval_state, best_seen_acc_V)
+        log_best_eval_summary(best_eval_state, best_seen_acc_V, best_main_gzsl_H)
 
 
 

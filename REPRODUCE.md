@@ -183,7 +183,7 @@ DFG 脚本内部会通过 `--netR_model_path` 指向前一步 DRG 产生的权�
 - DRG 和 DFG 必须使用同一数据集
 - DRG 和 DFG 必须使用同一组相容超参数
 - 如果你改了脚本里的参数，也要同步修改 DFG 的 `--netR_model_path`
-- 如果你要从已保存的 DFG checkpoint 继续训练或加载当前 DFG 权重，可以额外传 `--netG_model_path <DFG_CHECKPOINT>`；`--model_path` 也可以作为兼容别名使用
+- 如果你要加载已保存的 DFG 权重，可以额外传 `--netG_model_path <DFG_CHECKPOINT>`；`--model_path` 也可以作为兼容别名使用
 
 当前仓库里的 DFG 脚本还默认打开了基于稳定关系空间的 VSRA 训练：
 
@@ -195,7 +195,7 @@ DFG 脚本内部会通过 `--netR_model_path` 指向前一步 DRG 产生的权�
 - 上述 `r_0_teacher` 会再经过独立的 `netCTeacherEmbed` 映到关系空间，用于训练期的 VSRA `C teacher`
 - 采样/合成阶段仍保持原始 DFG 逻辑：生成条件里的 `C` 来自 `DRG` 直接采样得到的 fake `C`
 - 真实阶段额外加入了 `RKD(c_teacher, S)` 作为最小锚点，用来防止 `C teacher` 在纯关系监督下漂移
-- 当前 DFG checkpoint 会同时保存 `E / G / Dec / RelProj / CTeacherEmbed / D_x0 / D_xt / D_xc` 的权重，以及对应优化器状态和动态的 `lambda1`
+- 当前 DFG checkpoint 只保存 `E / G / Dec / VSRARelHead / VSRACHead / D_x0 / D_xt / D_xc` 的权重、动态的 `lambda1` 和少量元信息，不再保存优化器状态
 
 ## 4. 训练过程中会自动完成什么
 
@@ -211,7 +211,7 @@ DFG 脚本内部会通过 `--netR_model_path` 指向前一步 DRG 产生的权�
 其中：
 
 - `DRG` 会自动做 `Seen (C)`、`ZSL (C)`、`GZSL (C)` 评估，并保存 `*_gzsl.tar` 和 `*_zsl.tar`
-- `DFG` 会自动做 `Seen (V)` 以及多种视角下的 `ZSL` / `GZSL` 评估，并按对应后缀保存 checkpoint
+- `DFG` 会自动做 `Seen (V)` 以及多种视角下的 `ZSL` / `GZSL` 评估，但只在 `GZSL pro (VCS)` 的 `H` 创新高时保存一个主 checkpoint：`*_gzsl.tar`
 
 因此，复现实验的最小闭环就是：
 
