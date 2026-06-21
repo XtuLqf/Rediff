@@ -48,7 +48,9 @@ logger.write(
 
 if opt.manualSeed is None:
     opt.manualSeed = random.randint(1, 10000)
-print("Random Seed: ", opt.manualSeed)
+seed_message = "Random Seed: %d" % opt.manualSeed
+print(seed_message)
+logger.write(seed_message + "\n")
 random.seed(opt.manualSeed)
 torch.manual_seed(opt.manualSeed)
 if opt.cuda:
@@ -184,33 +186,53 @@ def generate_syn_feature(zerodiff, classes, attribute, num, progressive=False):
     return syn_feature, syn_con, syn_label
 
 
-def save_zerodiff(zerodiff, save_name, post):
-    torch.save({'state_dict_E': zerodiff.netE.state_dict(),
-                'state_dict_G': zerodiff.netG.state_dict(),
-                'state_dict_Dec': zerodiff.netDec.state_dict(),
-                'state_dict_VSRARelHead': zerodiff.netVSRARelHead.state_dict(),
-                'state_dict_VSRACHead': zerodiff.netVSRACHead.state_dict(),
-                'state_dict_D_x0': zerodiff.netD_x0.state_dict(),
-                'state_dict_D_xt': zerodiff.netD_xt.state_dict(),
-                'state_dict_D_xc': zerodiff.netD_xc.state_dict(),
-                'lambda1': zerodiff.lambda1,
-                'checkpoint_type': 'dfg_weights',
-                'save_postfix': post,
-                }, save_name + post + '.tar')
+def save_dfg_slim_checkpoint(zerodiff, save_name, post):
+    torch.save({
+        'state_dict_G': zerodiff.netG.state_dict(),
+        'state_dict_Dec': zerodiff.netDec.state_dict(),
+        'checkpoint_type': 'dfg_slim',
+        'checkpoint_format': 2,
+        'save_postfix': post,
+    }, save_name + post + '.tar')
 
 
-def load_zerodiff(zerodiff, checkpoint_path, load_optimizers=True):
+def load_drg_generator_state(checkpoint_path, device):
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    generator_state = checkpoint.get('state_dict_R')
+    if generator_state is None:
+        generator_state = checkpoint.get('state_dict_G_con')
+    if generator_state is None:
+        raise KeyError("DRG checkpoint must contain 'state_dict_R' or legacy 'state_dict_G_con'.")
+    return generator_state
+
+
+def load_dfg_checkpoint(zerodiff, checkpoint_path):
     checkpoint = torch.load(checkpoint_path, map_location=zerodiff.device)
 
+    if 'state_dict_G' not in checkpoint:
+        raise KeyError("DFG checkpoint must contain 'state_dict_G'.")
+    zerodiff.netG.load_state_dict(checkpoint['state_dict_G'])
+
+    decoder_state = checkpoint.get('state_dict_Dec')
+    if decoder_state is not None:
+        zerodiff.netDec.load_state_dict(decoder_state)
+
+    # Legacy full checkpoint compatibility: new DFG checkpoints are slim and do not save these fields.
     encoder_state = checkpoint.get('state_dict_E')
     if encoder_state is not None:
         zerodiff.netE.load_state_dict(encoder_state)
 
-    zerodiff.netG.load_state_dict(checkpoint['state_dict_G'])
-    zerodiff.netDec.load_state_dict(checkpoint['state_dict_Dec'])
-    zerodiff.netD_x0.load_state_dict(checkpoint['state_dict_D_x0'])
-    zerodiff.netD_xt.load_state_dict(checkpoint['state_dict_D_xt'])
-    zerodiff.netD_xc.load_state_dict(checkpoint['state_dict_D_xc'])
+    discriminator_x0_state = checkpoint.get('state_dict_D_x0')
+    if discriminator_x0_state is not None:
+        zerodiff.netD_x0.load_state_dict(discriminator_x0_state)
+
+    discriminator_xt_state = checkpoint.get('state_dict_D_xt')
+    if discriminator_xt_state is not None:
+        zerodiff.netD_xt.load_state_dict(discriminator_xt_state)
+
+    discriminator_xc_state = checkpoint.get('state_dict_D_xc')
+    if discriminator_xc_state is not None:
+        zerodiff.netD_xc.load_state_dict(discriminator_xc_state)
 
     vsra_rel_head_state = checkpoint.get('state_dict_VSRARelHead')
     if vsra_rel_head_state is None:
@@ -223,26 +245,6 @@ def load_zerodiff(zerodiff, checkpoint_path, load_optimizers=True):
         vsra_c_head_state = checkpoint.get('state_dict_CTeacherEmbed')
     if vsra_c_head_state is not None:
         zerodiff.netVSRACHead.load_state_dict(vsra_c_head_state)
-
-    if load_optimizers:
-        optimizer_pairs = (
-            ('optimizer_E', zerodiff.optimizerE),
-            ('optimizer_G', zerodiff.optimizerG),
-            ('optimizer_Dec', zerodiff.optimizerDec),
-            ('optimizer_VSRARelHead', zerodiff.optimizerVSRARelHead),
-            ('optimizer_VSRACHead', zerodiff.optimizerVSRACHead),
-            ('optimizer_D_x0', zerodiff.optimizerD_x0),
-            ('optimizer_D_xt', zerodiff.optimizerD_xt),
-            ('optimizer_D_xc', zerodiff.optimizerD_xc),
-        )
-        for key, optimizer in optimizer_pairs:
-            state = checkpoint.get(key)
-            if state is None and key == 'optimizer_VSRARelHead':
-                state = checkpoint.get('optimizer_RelProj')
-            if state is None and key == 'optimizer_VSRACHead':
-                state = checkpoint.get('optimizer_CTeacherEmbed')
-            if state is not None:
-                optimizer.load_state_dict(state)
 
     lambda1 = checkpoint.get('lambda1')
     if lambda1 is not None:
@@ -425,9 +427,6 @@ def log_best_eval_summary(best_eval_state, best_seen_acc_v, best_main_gzsl_h):
         log_message('best_acc_zsl_list (%s): %s' % (modality_name, zsl_metrics['acc_list']))
 
     log_message('best seen (V): %.4f' % as_scalar(best_seen_acc_v))
-    if opt.gzsl:
-        log_message('best saved DFG checkpoint (GZSL pro VCS): %.4f' % as_scalar(best_main_gzsl_h))
-
 
 class ZERODIFF(torch.nn.Module):
     def __init__(self, data, n_T, betas, seenclasses, unseenclasses, attribute,  netR_model_path, device='cuda'):
@@ -486,17 +485,15 @@ class ZERODIFF(torch.nn.Module):
         self.data = data
 
         self.netR = zerodiff_tools.DRG_Generator(opt).to(self.device)
-        netR_state_dict = torch.load(netR_model_path, map_location=self.device)
-        netR_weights = netR_state_dict.get('state_dict_G_con') or netR_state_dict.get('state_dict_R')
-        if netR_weights is None:
-            raise KeyError("netR checkpoint must contain 'state_dict_G_con' or 'state_dict_R'.")
-        self.netR.load_state_dict(netR_weights)
+        self.netR.load_state_dict(load_drg_generator_state(netR_model_path, self.device))
         self.netR.eval()
 
-        resume_checkpoint_path = opt.netG_model_path or opt.model_path
-        if resume_checkpoint_path:
-            load_zerodiff(self, resume_checkpoint_path)
-            print("Loaded DFG checkpoint from:", resume_checkpoint_path)
+        dfg_checkpoint_path = opt.netG_model_path or opt.model_path
+        if dfg_checkpoint_path:
+            checkpoint = load_dfg_checkpoint(self, dfg_checkpoint_path)
+            print("Loaded DFG checkpoint from:", dfg_checkpoint_path)
+            if checkpoint.get('checkpoint_type') == 'dfg_slim':
+                print("Loaded slim DFG checkpoint: training-only modules remain initialized.")
 
         self.interval_recorder_sum = {}
         self.init_recorder()
@@ -973,7 +970,7 @@ for epoch in range(0, opt.nepoch):
                     current_gzsl_h = as_scalar(gzsl_cls.H)
                     if eval_variant['is_progressive'] and modality_name == 'VCS' and best_main_gzsl_H < current_gzsl_h:
                         best_main_gzsl_H = current_gzsl_h
-                        save_zerodiff(zerodiff, model_save_name, '_gzsl')
+                        save_dfg_slim_checkpoint(zerodiff, model_save_name, '_gzsl')
                     log_gzsl_result('GZSL%s (%s)' % (eval_variant['log_suffix'], modality_name), gzsl_cls)
 
         for eval_variant in eval_variants:

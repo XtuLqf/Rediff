@@ -12,10 +12,13 @@ import zerodiff_tools
 import classifiers.classifier_images as classifier
 import os
 
-def save_model(netR, model_save_name, post):
-    torch.save({'state_dict_R': netR.state_dict(),
-                'state_dict_G_con': netR.state_dict(),
-                }, model_save_name + post + '.tar')
+def save_drg_checkpoint(netR, model_save_name, post):
+    torch.save({
+        'state_dict_R': netR.state_dict(),
+        'checkpoint_type': 'drg_slim',
+        'checkpoint_format': 2,
+        'save_postfix': post,
+    }, model_save_name + post + '.tar')
 
 
 class Logger(object):
@@ -51,7 +54,9 @@ model_save_name = "./out/%s/zerodiff_DRG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_beta
 
 if opt.manualSeed is None:
     opt.manualSeed = random.randint(1, 10000)
-print("Random Seed: ", opt.manualSeed)
+seed_message = "Random Seed: %d" % opt.manualSeed
+print(seed_message)
+logger.write(seed_message + "\n")
 random.seed(opt.manualSeed)
 torch.manual_seed(opt.manualSeed)
 if opt.cuda:
@@ -368,7 +373,7 @@ for epoch in range(0, opt.nepoch):
                                                25, opt.syn_num, cls_mode="GZSL", con_size=2048, _train_C=train_C, useV=False, useC=True)
             if best_gzsl_acc_C < gzsl_cls_C.H:
                 best_acc_seen_C, best_acc_unseen_C, best_gzsl_acc_C = gzsl_cls_C.acc_seen, gzsl_cls_C.acc_unseen, gzsl_cls_C.H
-                save_model(zerodiff_drg.netR, model_save_name, '_gzsl')
+                save_drg_checkpoint(zerodiff_drg.netR, model_save_name, '_gzsl')
             log_message('GZSL (C): U: %.4f, S: %.4f, H: %.4f' % (
                 as_scalar(gzsl_cls_C.acc_unseen),
                 as_scalar(gzsl_cls_C.acc_seen),
@@ -383,7 +388,7 @@ for epoch in range(0, opt.nepoch):
         acc = zsl_cls_C.acc
         if best_zsl_acc_C < acc:
             best_zsl_acc_C = acc
-            save_model(zerodiff_drg.netR, model_save_name, '_zsl')
+            save_drg_checkpoint(zerodiff_drg.netR, model_save_name, '_zsl')
         log_message('ZSL (C): %.4f' % as_scalar(acc))
 
         # Train Seen classifier

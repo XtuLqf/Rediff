@@ -71,11 +71,11 @@ parser.add_argument('--ddpmbeta2', type=float, default=20)
 # pretrain
 parser.add_argument('--init_con', action='store_true', default=False, help='enbale MinMaxScaler on contrastive representations')
 parser.add_argument("--netE_con_model_path", default=None)
-parser.add_argument("--netR_model_path", default=None)
+parser.add_argument("--netR_model_path", default=None, help='path to a DRG checkpoint for DFG training')
 # eval
-parser.add_argument("--netG_model_path", default=None)
+parser.add_argument("--netG_model_path", default=None, help='path to DFG generation/evaluation weights')
 #visualize
-parser.add_argument("--model_path", default=None)
+parser.add_argument("--model_path", default=None, help='compatibility alias for --netG_model_path')
 
 opt = parser.parse_args()
 opt.lambda2 = opt.lambda1
