@@ -272,7 +272,7 @@ def load_dfg_checkpoint(zerodiff, checkpoint_path):
     return checkpoint
 
 
-MODALITY_ORDER = ("V", "VS", "C", "VC", "VCS")
+MODALITY_ORDER = ("V", "S", "VS", "C", "CS", "VC", "VCS")
 
 
 def log_message(message):
@@ -313,6 +313,13 @@ def get_eval_modality_configs(zerodiff):
         'V': {
             'classifier_kwargs': {},
         },
+        'S': {
+            'classifier_kwargs': {
+                **decoder_kwargs,
+                'useV': False,
+                'useS': True,
+            },
+        },
         'VS': {
             'classifier_kwargs': {
                 **decoder_kwargs,
@@ -328,6 +335,15 @@ def get_eval_modality_configs(zerodiff):
         },
         'VC': {
             'classifier_kwargs': {
+                'useC': True,
+                'con_size': 2048,
+            },
+        },
+        'CS': {
+            'classifier_kwargs': {
+                **decoder_kwargs,
+                'useV': False,
+                'useS': True,
                 'useC': True,
                 'con_size': 2048,
             },
@@ -395,6 +411,32 @@ def log_gzsl_result(prefix, cls_result):
 
 def log_zsl_result(prefix, acc):
     log_message('%s: %.4f' % (prefix, as_scalar(acc)))
+
+
+def log_feature_stats(name, x):
+    with torch.no_grad():
+        x = x.detach().float()
+        row_norms = x.norm(dim=1)
+        log_message(
+            '[C STAT] %s shape=%s mean=%.6f std=%.6f norm=%.6f norm_std=%.6f min=%.6f max=%.6f' % (
+                name,
+                tuple(x.shape),
+                x.mean().item(),
+                x.std().item(),
+                row_norms.mean().item(),
+                row_norms.std().item(),
+                x.min().item(),
+                x.max().item(),
+            )
+        )
+
+
+def log_c_distribution_diagnostics(data_loader, syn_con, syn_seen_con):
+    log_feature_stats('real_train_seen_C', data_loader.train_paco)
+    log_feature_stats('real_test_seen_C', data_loader.test_seen_paco)
+    log_feature_stats('real_test_unseen_C', data_loader.test_unseen_paco)
+    log_feature_stats('fake_unseen_syn_C', syn_con)
+    log_feature_stats('fake_seen_syn_C', syn_seen_con)
 
 
 def build_eval_variants(data_loader, syn_feature, syn_con, syn_label, syn_feature_pro, syn_con_pro, syn_label_pro):
@@ -991,7 +1033,8 @@ for epoch in range(0, opt.nepoch):
         zerodiff.eval()
         syn_feature, syn_con, syn_label = generate_syn_feature(zerodiff, data.unseenclasses, data.attribute, opt.syn_num)
         syn_feature_pro, syn_con_pro, syn_label_pro = generate_syn_feature(zerodiff, data.unseenclasses, data.attribute, opt.syn_num, progressive=True)
-        syn_feature_seen, _, syn_label_seen = generate_syn_feature(zerodiff, data.seenclasses, data.attribute, opt.syn_num)
+        syn_feature_seen, syn_seen_con, syn_label_seen = generate_syn_feature(zerodiff, data.seenclasses, data.attribute, opt.syn_num)
+        log_c_distribution_diagnostics(data, syn_con, syn_seen_con)
 
         eval_variants = build_eval_variants(
             data,
