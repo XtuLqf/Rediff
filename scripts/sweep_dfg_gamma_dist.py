@@ -17,7 +17,7 @@ DATAROOT = ROOT / "Dataset"
 DATASET_CONFIGS = {
     "CUB": {
         "omp_num_threads": "3",
-        "default_values": [0.0, 1.0, 2.0, 4.0],
+        "default_values": [0.25, 0.5, 1.5, 2.5, 4.0],
         "netr_candidates": [
             "zerodiff_DRG_100percent_att:sent_b:64_lr:0.0001_n_T:4_betas:0.1,20_gamma:ADV:1.0_VAE:0.0_x0:1.0_xt:1.0_dist:1.0_num:300_gzsl.tar",
             "zerodiff_DRG_100percent_att:sent_b:64_lr:0.0001_n_T:4_betas:0.1,20_gamma:ADV:1.0_VAE:0.0_x0:1.0_xt:1.0_dist:1.0_num:300_zsl.tar",
@@ -38,7 +38,7 @@ DATASET_CONFIGS = {
     },
     "AWA2": {
         "omp_num_threads": "4",
-        "default_values": [0.0, 2.5, 5.0, 10.0],
+        "default_values": [0.25, 0.5, 1.0, 1.5, 2.0],
         "netr_candidates": [
             "zerodiff_DRG_100percent_att:att_b:64_lr:0.0005_n_T:4_betas:0.1,20_gamma:ADV:10.0_VAE:1.0_x0:1.0_xt:1.0_dist:0.0_num:1800_gzsl.tar",
             "zerodiff_DRG_100percent_att:att_b:64_lr:0.0005_n_T:4_betas:0.1,20_gamma:ADV:10.0_VAE:1.0_x0:1.0_xt:1.0_dist:0.0_num:1800_zsl.tar",
@@ -60,7 +60,7 @@ DATASET_CONFIGS = {
     },
     "SUN": {
         "omp_num_threads": "3",
-        "default_values": [0.0, 0.5, 1.0, 2.0],
+        "default_values": [0.25, 0.4, 0.5, 0.6, 0.75],
         "netr_candidates": [
             "zerodiff_DRG_100percent_att:att_b:64_lr:0.0001_n_T:4_betas:0.1,20_gamma:ADV:1.0_VAE:1.0_x0:1.0_xt:1.0_dist:0.0_num:400_gzsl.tar",
             "zerodiff_DRG_100percent_att:att_b:64_lr:0.0001_n_T:4_betas:0.1,20_gamma:ADV:1.0_VAE:1.0_x0:1.0_xt:1.0_dist:0.0_num:400_zsl.tar",
