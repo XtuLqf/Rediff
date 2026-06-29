@@ -59,6 +59,10 @@ parser.add_argument("--rel_dist_ratio", type=float, default=1.0)
 parser.add_argument("--rel_angle_ratio", type=float, default=2.0)
 parser.add_argument("--rel_angle_max_samples", type=int, default=128)
 parser.add_argument('--rel_use_angle', action='store_true', default=False)
+parser.add_argument('--vsra_grad_debug', action='store_true', default=False,
+					help='Log cosine similarity and norm ratio between base DFG and VSRA generator gradients.')
+parser.add_argument('--vsra_grad_debug_interval', type=int, default=50,
+					help='Generator update interval for VSRA gradient debug logging.')
 ###
 parser.add_argument("--embed_type",  default='V', help='V/VA')
 parser.add_argument("--n_T", type=int, default=4)
@@ -90,4 +94,6 @@ if opt.gamma_rel > 0:
 		raise ValueError("relation teacher weights must be non-negative.")
 	if (opt.rel_sem_weight + opt.rel_con_weight) <= 0:
 		raise ValueError("gamma_rel > 0 requires at least one positive S/C teacher weight.")
+if opt.vsra_grad_debug and opt.vsra_grad_debug_interval <= 0:
+	raise ValueError("vsra_grad_debug_interval must be positive when vsra_grad_debug is enabled.")
 

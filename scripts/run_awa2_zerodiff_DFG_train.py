@@ -47,6 +47,7 @@ command = [
 	'--split_percent', '100', '--syn_num', '5400', '--gamma_dist', '0.0', '--factor_dist', '1.5',
 	'--gamma_rel', '1.0', '--rel_sem_weight', '1.0', '--rel_con_weight', '1.0', '--rel_proj_dim', '512',
 	'--rel_dist_ratio', '1.0', '--rel_angle_ratio', '2.0', '--rel_angle_max_samples', '128', '--rel_use_angle',
+	'--vsra_grad_debug', '--vsra_grad_debug_interval', '1',
 	'--netR_model_path', str(NETR_MODEL),
 ]
 

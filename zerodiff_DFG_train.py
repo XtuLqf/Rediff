@@ -159,6 +159,25 @@ def rkd_angle_loss(student_features, teacher_features, eps, max_samples):
     return F.smooth_l1_loss(student_angles, teacher_angles, reduction='mean')
 
 
+def grad_vector(loss, params):
+    if not torch.is_tensor(loss) or not loss.requires_grad:
+        return None
+
+    grads = torch.autograd.grad(
+        loss,
+        params,
+        retain_graph=True,
+        allow_unused=True,
+    )
+    vec = []
+    for grad in grads:
+        if grad is not None:
+            vec.append(grad.detach().reshape(-1))
+    if len(vec) == 0:
+        return None
+    return torch.cat(vec)
+
+
 def get_train_steps_per_epoch(data_loader):
     return max(1, (data_loader.ntrain + opt.batch_size - 1) // opt.batch_size)
 
@@ -483,6 +502,7 @@ class ZERODIFF(torch.nn.Module):
 
         self.batch_size = opt.batch_size
         self.data = data
+        self.generator_update_step = 0
 
         self.netR = zerodiff_tools.DRG_Generator(opt).to(self.device)
         self.netR.load_state_dict(load_drg_generator_state(netR_model_path, self.device))
@@ -604,6 +624,51 @@ class ZERODIFF(torch.nn.Module):
 
         vsra_student_fake = self.netVSRARelHead(x_0_fake)
         return self.compute_vsra_losses(vsra_student_fake, att_0_real, vsra_c_teacher)
+
+    def should_log_vsra_grad_debug(self):
+        if not opt.vsra_grad_debug or self.gamma_rel <= 0:
+            return False
+        next_step = self.generator_update_step + 1
+        return next_step == 1 or next_step % opt.vsra_grad_debug_interval == 0
+
+    def log_vsra_grad_debug(self, loss_g_base, loss_vsra_weighted):
+        gen_params = [p for p in self.netG.parameters() if p.requires_grad]
+        if len(gen_params) == 0:
+            log_message("[VSRA DEBUG] skipped: no trainable netG parameters")
+            return
+
+        g_base = grad_vector(loss_g_base, gen_params)
+        g_vsra = grad_vector(loss_vsra_weighted, gen_params)
+        if g_base is None or g_vsra is None:
+            log_message("[VSRA DEBUG] skipped: missing base or VSRA gradients")
+            return
+        if not torch.isfinite(g_base).all() or not torch.isfinite(g_vsra).all():
+            log_message("[VSRA DEBUG] skipped: non-finite gradient values")
+            return
+
+        base_norm = g_base.norm()
+        vsra_norm = g_vsra.norm()
+        if base_norm.item() <= 0 or vsra_norm.item() <= 0:
+            log_message(
+                "[VSRA DEBUG] step=%d skipped: base_norm=%.6f, vsra_norm=%.6f" % (
+                    self.generator_update_step + 1,
+                    base_norm.item(),
+                    vsra_norm.item(),
+                )
+            )
+            return
+
+        grad_cos = F.cosine_similarity(g_base, g_vsra, dim=0).item()
+        grad_ratio = (vsra_norm / (base_norm + 1e-8)).item()
+        log_message(
+            "[VSRA DEBUG] step=%d cos=%.4f, ratio=%.4f, base_norm=%.4f, vsra_norm=%.4f" % (
+                self.generator_update_step + 1,
+                grad_cos,
+                grad_ratio,
+                base_norm.item(),
+                vsra_norm.item(),
+            )
+        )
 
     def forward(self):
         gp_sum = 0  # Running sum used for adaptive lambda scaling.
@@ -766,9 +831,7 @@ class ZERODIFF(torch.nn.Module):
         x_0_fake = self.netG(z, att_0_real, con_0_real, x_tp1_real.detach(), _ts_feat)
         x_t_fake = self.sample_posterior(x_0_fake, x_tp1_real, _ts_feat)
 
-        errG = 0.0
         vae_loss_seen = loss_fn(x_0_fake, x_0_real, means, log_var) if self.gamma_VAE > 0 else torch.tensor(0.0).to(self.device)
-        errG += self.gamma_VAE * vae_loss_seen
 
         criticG_fake_x0 = -self.netD_x0(x_0_fake, att_0_real).mean() if self.gamma_x0 > 0 else torch.tensor(0.0).to( self.device)
         criticG_fake_xt = -self.netD_xt(x_t_fake, x_tp1_real, att_0_real, con_0_real, _ts_feat).mean() if self.gamma_xt > 0 else torch.tensor(0.0).to(self.device)
@@ -776,19 +839,21 @@ class ZERODIFF(torch.nn.Module):
         criticG_fake = self.gamma_x0 * criticG_fake_x0 + self.gamma_xt * criticG_fake_xt + criticG_fake_xc
         G_cost = criticG_fake
 
-        errG += self.gamma_ADV * G_cost
-
         self.netDec.zero_grad()
         att_0_recons = self.netDec(x_0_fake)
         R_cost = WeightedL14att(att_0_recons, att_0_real)
-        errG += self.gamma_recons * R_cost
 
         vsra_distance_loss, vsra_angle_loss, vsra_loss = self.compute_generator_vsra_losses(
             x_0_fake,
             att_0_real,
             vsra_c_teacher,
         )
-        errG += self.gamma_rel * vsra_loss
+        loss_g_base = self.gamma_VAE * vae_loss_seen + self.gamma_ADV * G_cost + self.gamma_recons * R_cost
+        loss_vsra_weighted = self.gamma_rel * vsra_loss
+        errG = loss_g_base + loss_vsra_weighted
+
+        if self.should_log_vsra_grad_debug():
+            self.log_vsra_grad_debug(loss_g_base, loss_vsra_weighted)
 
         errG.backward()
         # write a condition here
@@ -796,6 +861,7 @@ class ZERODIFF(torch.nn.Module):
         self.optimizerG.step()
         if self.gamma_recons > 0 and not opt.freeze_dec:  # not train decoder at feedback time
             self.optimizerDec.step()
+        self.generator_update_step += 1
         return G_cost, vae_loss_seen, real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss, vsra_distance_loss, vsra_angle_loss, vsra_loss
 
     def sample_from_model(self, att, progressive=False):
