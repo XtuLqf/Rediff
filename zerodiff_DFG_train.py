@@ -439,6 +439,146 @@ def log_c_distribution_diagnostics(data_loader, syn_con, syn_seen_con):
     log_feature_stats('fake_seen_syn_C', syn_seen_con)
 
 
+def normalize_rows(x):
+    return F.normalize(x, p=2, dim=1)
+
+
+def build_class_prototypes(features, labels, normalize=False):
+    features = features.detach().float().cpu()
+    labels = labels.detach().long().cpu()
+    if normalize:
+        features = normalize_rows(features)
+    classes = torch.unique(labels, sorted=True)
+    prototypes = []
+    for cls in classes:
+        prototypes.append(features[labels == cls].mean(dim=0))
+    prototypes = torch.stack(prototypes, dim=0)
+    if normalize:
+        prototypes = normalize_rows(prototypes)
+    return classes, prototypes
+
+
+def pairwise_euclidean(x, y):
+    x = x.detach().float().cpu()
+    y = y.detach().float().cpu()
+    distances_sq = x.pow(2).sum(dim=1, keepdim=True) + y.pow(2).sum(dim=1).unsqueeze(0) - 2 * x.matmul(y.t())
+    return distances_sq.clamp_min(0).sqrt()
+
+
+def class_prototype_top1(features, labels, proto_classes, prototypes, normalize=False):
+    features = features.detach().float().cpu()
+    labels = labels.detach().long().cpu()
+    if normalize:
+        features = normalize_rows(features)
+    distances = pairwise_euclidean(features, prototypes)
+    nearest_index = distances.argmin(dim=1)
+    pred_labels = proto_classes[nearest_index]
+    return (pred_labels == labels).float().mean().item()
+
+
+def labels_to_proto_indices(labels, proto_classes):
+    proto_index = {int(cls.item()): idx for idx, cls in enumerate(proto_classes)}
+    indices = []
+    missing = []
+    for label in labels.detach().long().cpu().tolist():
+        if label in proto_index:
+            indices.append(proto_index[label])
+        else:
+            missing.append(label)
+            indices.append(-1)
+    return torch.LongTensor(indices), missing
+
+
+def format_seen_hist(seen_classes, nearest_seen_index, seen_is_nearest, topk=10):
+    selected = nearest_seen_index[seen_is_nearest]
+    if selected.numel() == 0:
+        return "none"
+    selected_classes = seen_classes[selected]
+    classes, counts = torch.unique(selected_classes, sorted=True, return_counts=True)
+    order = torch.argsort(counts, descending=True)[:topk]
+    return ", ".join(
+        "%d:%d" % (int(classes[i].item()), int(counts[i].item()))
+        for i in order
+    )
+
+
+def log_fake_unseen_alignment(data_loader, syn_con, syn_label, normalize=False):
+    mode_name = "l2" if normalize else "raw"
+    seen_classes, seen_prototypes = build_class_prototypes(data_loader.train_paco, data_loader.train_label, normalize=normalize)
+    unseen_classes, unseen_prototypes = build_class_prototypes(data_loader.test_unseen_paco, data_loader.test_unseen_label, normalize=normalize)
+
+    real_unseen_acc = class_prototype_top1(
+        data_loader.test_unseen_paco,
+        data_loader.test_unseen_label,
+        unseen_classes,
+        unseen_prototypes,
+        normalize=normalize,
+    )
+    real_seen_acc = class_prototype_top1(
+        data_loader.test_seen_paco,
+        data_loader.test_seen_label,
+        seen_classes,
+        seen_prototypes,
+        normalize=normalize,
+    )
+
+    fake_unseen = syn_con.detach().float().cpu()
+    fake_labels = syn_label.detach().long().cpu()
+    if normalize:
+        fake_unseen = normalize_rows(fake_unseen)
+
+    dist_unseen = pairwise_euclidean(fake_unseen, unseen_prototypes)
+    dist_seen = pairwise_euclidean(fake_unseen, seen_prototypes)
+    nearest_unseen_dist, nearest_unseen_index = dist_unseen.min(dim=1)
+    nearest_seen_dist, nearest_seen_index = dist_seen.min(dim=1)
+
+    own_unseen_index, missing = labels_to_proto_indices(fake_labels, unseen_classes)
+    valid = own_unseen_index >= 0
+    if valid.any():
+        own_unseen_dist = dist_unseen[torch.arange(dist_unseen.size(0))[valid], own_unseen_index[valid]]
+        fake_unseen_top1 = (unseen_classes[nearest_unseen_index[valid]] == fake_labels[valid]).float().mean().item()
+        own_mean = own_unseen_dist.mean().item()
+        own_std = own_unseen_dist.std().item()
+    else:
+        fake_unseen_top1 = 0.0
+        own_mean = float("nan")
+        own_std = float("nan")
+
+    margin = nearest_seen_dist - nearest_unseen_dist
+    seen_is_nearest = nearest_seen_dist < nearest_unseen_dist
+    seen_hist = format_seen_hist(seen_classes, nearest_seen_index, seen_is_nearest)
+
+    log_message(
+        '[C ALIGN] mode=%s real_test_unseen_to_real_unseen_proto_top1=%.4f real_test_seen_to_real_seen_proto_top1=%.4f' % (
+            mode_name,
+            real_unseen_acc,
+            real_seen_acc,
+        )
+    )
+    log_message(
+        '[C ALIGN] mode=%s fake_unseen_to_real_unseen_proto_top1=%.4f own_unseen_dist_mean=%.6f own_unseen_dist_std=%.6f nearest_unseen_dist_mean=%.6f nearest_unseen_dist_std=%.6f nearest_seen_dist_mean=%.6f nearest_seen_dist_std=%.6f margin_mean=%.6f margin_std=%.6f nearest_seen_rate=%.4f missing_unseen_labels=%d' % (
+            mode_name,
+            fake_unseen_top1,
+            own_mean,
+            own_std,
+            nearest_unseen_dist.mean().item(),
+            nearest_unseen_dist.std().item(),
+            nearest_seen_dist.mean().item(),
+            nearest_seen_dist.std().item(),
+            margin.mean().item(),
+            margin.std().item(),
+            seen_is_nearest.float().mean().item(),
+            len(set(missing)),
+        )
+    )
+    log_message('[C ALIGN] mode=%s nearest_seen_class_hist=%s' % (mode_name, seen_hist))
+
+
+def log_c_alignment_diagnostics(data_loader, syn_con, syn_label):
+    log_fake_unseen_alignment(data_loader, syn_con, syn_label, normalize=False)
+    log_fake_unseen_alignment(data_loader, syn_con, syn_label, normalize=True)
+
+
 def build_eval_variants(data_loader, syn_feature, syn_con, syn_label, syn_feature_pro, syn_con_pro, syn_label_pro):
     eval_variants = [
         {
@@ -1035,6 +1175,7 @@ for epoch in range(0, opt.nepoch):
         syn_feature_pro, syn_con_pro, syn_label_pro = generate_syn_feature(zerodiff, data.unseenclasses, data.attribute, opt.syn_num, progressive=True)
         syn_feature_seen, syn_seen_con, syn_label_seen = generate_syn_feature(zerodiff, data.seenclasses, data.attribute, opt.syn_num)
         log_c_distribution_diagnostics(data, syn_con, syn_seen_con)
+        log_c_alignment_diagnostics(data, syn_con, syn_label)
 
         eval_variants = build_eval_variants(
             data,
