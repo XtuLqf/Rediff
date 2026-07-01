@@ -63,6 +63,10 @@ parser.add_argument('--vsra_grad_debug', action='store_true', default=False,
 					help='Log cosine similarity and norm ratio between base DFG and VSRA generator gradients.')
 parser.add_argument('--vsra_grad_debug_interval', type=int, default=50,
 					help='Generator update interval for VSRA gradient debug logging.')
+parser.add_argument('--eval_c_scales', default='1.0',
+					help='Comma-separated C feature scales for evaluation-side C ablation.')
+parser.add_argument('--eval_c_scale_modalities', default='VC,VCS',
+					help='Comma-separated C-using modalities to evaluate at non-baseline C scales.')
 ###
 parser.add_argument("--embed_type",  default='V', help='V/VA')
 parser.add_argument("--n_T", type=int, default=4)

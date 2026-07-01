@@ -15,7 +15,7 @@ class CLASSIFIER:
     # train_Y is interger
     def __init__(self, _train_X, _train_Y, data_loader, _nclass, _cuda, _lr=0.001, _beta1=0.5, _nepoch=20,
                  _batch_size=100, cls_mode="GZSL", useV=True, useS=False, useC=False, netDec=None, dec_size=4096,
-                 dec_hidden_size=4096, _train_C=None, con_size=2048):
+                 dec_hidden_size=4096, _train_C=None, con_size=2048, con_scale=1.0):
         self.train_X = _train_X.clone()
         self.train_Y = _train_Y.clone()
         if _train_C is not None:
@@ -39,6 +39,7 @@ class CLASSIFIER:
         self.useV = useV
         self.useS = useS
         self.useC = useC
+        self.con_scale = con_scale
 
         self.input_dim = 0
         if self.useV:
@@ -268,6 +269,7 @@ class CLASSIFIER:
                     inputC = test_C[start:end].cuda()
                 else:
                     inputC = test_C[start:end]
+                inputC = inputC * self.con_scale
                 inputData.append(inputC)
             new_test_X[start:end] = torch.cat(inputData, dim=1).detach().cpu()
             start = end
