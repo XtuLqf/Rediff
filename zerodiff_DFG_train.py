@@ -12,12 +12,64 @@ from config_zerodiff import opt
 import zerodiff_tools
 import torch.nn.functional as F
 import os
+from datetime import datetime
+
+
+def parse_eval_c_scales(raw_scales):
+    scales = []
+    for raw_scale in raw_scales.split(','):
+        raw_scale = raw_scale.strip()
+        if raw_scale == '':
+            continue
+        scale = float(raw_scale)
+        if scale < 0:
+            raise ValueError("--eval_c_scales values must be non-negative.")
+        scales.append(scale)
+    if len(scales) == 0:
+        raise ValueError("--eval_c_scales must contain at least one value.")
+    if not any(abs(scale - 1.0) < 1e-12 for scale in scales):
+        scales.insert(0, 1.0)
+    return scales
+
+
+def parse_eval_c_scale_modalities(raw_modalities, modality_configs):
+    modalities = []
+    for raw_modality in raw_modalities.split(','):
+        modality = raw_modality.strip()
+        if modality == '':
+            continue
+        if modality not in modality_configs:
+            raise ValueError("Unknown eval C scale modality: %s" % modality)
+        if not modality_configs[modality]['classifier_kwargs'].get('useC'):
+            raise ValueError("Eval C scale modality must use C: %s" % modality)
+        modalities.append(modality)
+    if len(modalities) == 0:
+        raise ValueError("--eval_c_scale_modalities must contain at least one C-using modality.")
+    return modalities
+
+
+def format_eval_c_scale(scale):
+    return "%g" % scale
+
 
 class Logger(object):
     def __init__(self, filename):
-        self.filename = filename
-        f = open(self.filename + '.log', "w")
+        self.filename = self._make_unique_filename(filename)
+        f = open(self.filename + '.log', "x")
         f.close()
+
+    @staticmethod
+    def _make_unique_filename(filename):
+        log_path = filename + '.log'
+        if not os.path.exists(log_path):
+            return filename
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        candidate = '%s_run%s' % (filename, timestamp)
+        suffix = 2
+        while os.path.exists(candidate + '.log'):
+            candidate = '%s_run%s_%d' % (filename, timestamp, suffix)
+            suffix += 1
+        return candidate
 
     def write(self, message):
         f = open(self.filename + '.log', "a")
@@ -36,7 +88,12 @@ model_save_name = "./out/%s/zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_beta
     opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
     str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.gamma_rel,
     opt.rel_dist_ratio, opt.rel_angle_ratio, int(opt.rel_use_angle), opt.factor_dist, opt.rel_con_weight, opt.rel_proj_dim, opt.syn_num)
+eval_c_scales = parse_eval_c_scales(opt.eval_c_scales)
+eval_c_scales_log = ','.join(format_eval_c_scale(scale) for scale in eval_c_scales)
 
+logger.write(
+    "Log file: %s.log\n" % logger.filename
+)
 logger.write(
     "VSRA teacher weights | sem: %.2f con: %.2f | proj_dim: %d\n" % (
         opt.rel_sem_weight,
@@ -45,6 +102,9 @@ logger.write(
     )
 )
 logger.write("Eval C scales: %s\n" % opt.eval_c_scales)
+logger.write("Effective Eval C scales: %s\n" % eval_c_scales_log)
+logger.write("eval_c_scales=%s\n" % opt.eval_c_scales)
+logger.write("effective_eval_c_scales=%s\n" % eval_c_scales_log)
 logger.write("Eval C scale modalities: %s\n" % opt.eval_c_scale_modalities)
 
 
@@ -284,43 +344,6 @@ def log_message(message):
 
 def as_scalar(value):
     return value.item() if torch.is_tensor(value) else value
-
-
-def parse_eval_c_scales(raw_scales):
-    scales = []
-    for raw_scale in raw_scales.split(','):
-        raw_scale = raw_scale.strip()
-        if raw_scale == '':
-            continue
-        scale = float(raw_scale)
-        if scale < 0:
-            raise ValueError("--eval_c_scales values must be non-negative.")
-        scales.append(scale)
-    if len(scales) == 0:
-        raise ValueError("--eval_c_scales must contain at least one value.")
-    if not any(abs(scale - 1.0) < 1e-12 for scale in scales):
-        scales.insert(0, 1.0)
-    return scales
-
-
-def parse_eval_c_scale_modalities(raw_modalities, modality_configs):
-    modalities = []
-    for raw_modality in raw_modalities.split(','):
-        modality = raw_modality.strip()
-        if modality == '':
-            continue
-        if modality not in modality_configs:
-            raise ValueError("Unknown eval C scale modality: %s" % modality)
-        if not modality_configs[modality]['classifier_kwargs'].get('useC'):
-            raise ValueError("Eval C scale modality must use C: %s" % modality)
-        modalities.append(modality)
-    if len(modalities) == 0:
-        raise ValueError("--eval_c_scale_modalities must contain at least one C-using modality.")
-    return modalities
-
-
-def format_eval_c_scale(scale):
-    return "%g" % scale
 
 
 def init_best_eval_state():
@@ -1172,7 +1195,6 @@ zerodiff = ZERODIFF(data, n_T=opt.n_T, betas=(opt.ddpmbeta1, opt.ddpmbeta2), see
 zerodiff.train()
 
 modality_configs = get_eval_modality_configs(zerodiff)
-eval_c_scales = parse_eval_c_scales(opt.eval_c_scales)
 eval_c_scale_modalities = parse_eval_c_scale_modalities(opt.eval_c_scale_modalities, modality_configs)
 extra_eval_c_scales = [scale for scale in eval_c_scales if abs(scale - 1.0) >= 1e-12]
 best_eval_state = init_best_eval_state()

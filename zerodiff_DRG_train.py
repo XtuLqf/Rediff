@@ -11,6 +11,7 @@ from config_zerodiff import opt
 import zerodiff_tools
 import classifiers.classifier_images as classifier
 import os
+from datetime import datetime
 
 def save_drg_checkpoint(netR, model_save_name, post):
     torch.save({
@@ -23,9 +24,22 @@ def save_drg_checkpoint(netR, model_save_name, post):
 
 class Logger(object):
     def __init__(self, filename):
-        self.filename = filename
-        f = open(self.filename + '.log', "w")
+        self.filename = self._make_unique_filename(filename)
+        f = open(self.filename + '.log', "x")
         f.close()
+
+    @staticmethod
+    def _make_unique_filename(filename):
+        log_path = filename + '.log'
+        if not os.path.exists(log_path):
+            return filename
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        candidate = '%s_run%s' % (filename, timestamp)
+        suffix = 2
+        while os.path.exists(candidate + '.log'):
+            candidate = '%s_run%s_%d' % (filename, timestamp, suffix)
+            suffix += 1
+        return candidate
 
     def write(self, message):
         f = open(self.filename + '.log', "a")
@@ -48,6 +62,7 @@ logger_name = "./log/%s/zerodiff_DRG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s
     opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
     str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.syn_num)
 logger = Logger(logger_name)
+logger.write("Log file: %s.log\n" % logger.filename)
 model_save_name = "./out/%s/zerodiff_DRG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_num:%d" % (
     opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
     str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.syn_num)
