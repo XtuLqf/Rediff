@@ -54,6 +54,10 @@ parser.add_argument("--gamma_rel", type=float, default=0.0)
 parser.add_argument("--rel_proj_dim", type=int, default=512)
 parser.add_argument("--rel_sem_weight", type=float, default=1.0)
 parser.add_argument("--rel_con_weight", type=float, default=1.0)
+parser.add_argument("--vsra_weight_mode", choices=("fixed", "adaptive"), default="fixed")
+parser.add_argument("--rel_gate_ema", type=float, default=0.99)
+parser.add_argument("--rel_gate_temperature", type=float, default=1.0)
+parser.add_argument("--rel_gate_warmup_ratio", type=float, default=0.1)
 parser.add_argument("--rel_eps", type=float, default=1e-12)
 parser.add_argument("--rel_dist_ratio", type=float, default=1.0)
 parser.add_argument("--rel_angle_ratio", type=float, default=2.0)
@@ -90,4 +94,10 @@ if opt.gamma_rel > 0:
 		raise ValueError("relation teacher weights must be non-negative.")
 	if (opt.rel_sem_weight + opt.rel_con_weight) <= 0:
 		raise ValueError("gamma_rel > 0 requires at least one positive S/C teacher weight.")
+	if not 0 <= opt.rel_gate_ema < 1:
+		raise ValueError("rel_gate_ema must be in [0, 1).")
+	if opt.rel_gate_temperature < 0:
+		raise ValueError("rel_gate_temperature must be non-negative.")
+	if not 0 <= opt.rel_gate_warmup_ratio <= 1:
+		raise ValueError("rel_gate_warmup_ratio must be in [0, 1].")
 

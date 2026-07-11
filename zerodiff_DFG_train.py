@@ -16,6 +16,7 @@ from sklearn import preprocessing
 import numpy as np
 import torch.nn as nn
 import os
+from vsra_adaptive import VSRAAdaptiveGate
 
 class Logger(object):
     def __init__(self, filename):
@@ -35,18 +36,29 @@ os.makedirs(folder_name, exist_ok=True)
 os.makedirs(f"./log/{opt.dataset}", exist_ok=True)
 os.makedirs(f"./out/{opt.dataset}", exist_ok=True)
 
-logger_name = "./log/%s/train_zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_rel:%.1f_rd:%.1f_ra:%.1f_ang:%d_f:%.1f_rc:%.1f_rp:%d_num:%s" % (
+logger_name = "./log/%s/train_zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_rel:%.1f_rd:%.1f_ra:%.1f_ang:%d_f:%.1f_rc:%s_rp:%d_num:%s" % (
     opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
     str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.gamma_rel,
-    opt.rel_dist_ratio, opt.rel_angle_ratio, int(opt.rel_use_angle), opt.factor_dist, opt.rel_con_weight, opt.rel_proj_dim, opt.syn_num)
+    opt.rel_dist_ratio, opt.rel_angle_ratio, int(opt.rel_use_angle), opt.factor_dist, str(opt.rel_con_weight), opt.rel_proj_dim, opt.syn_num)
+model_save_name = "./out/%s/zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_rel:%.1f_rd:%.1f_ra:%.1f_ang:%d_f:%.1f_rc:%s_rp:%d_num:%d" % (
+    opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
+    str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.gamma_rel,
+    opt.rel_dist_ratio, opt.rel_angle_ratio, int(opt.rel_use_angle), opt.factor_dist, str(opt.rel_con_weight), opt.rel_proj_dim, opt.syn_num)
+
+vsra_run_tag = "_vwm:%s" % opt.vsra_weight_mode
+if opt.vsra_weight_mode == "adaptive":
+    vsra_run_tag += "_ge:%s_gt:%s_gw:%s" % (
+        str(opt.rel_gate_ema),
+        str(opt.rel_gate_temperature),
+        str(opt.rel_gate_warmup_ratio),
+    )
+logger_name += vsra_run_tag
+model_save_name += vsra_run_tag + "_"
 logger = Logger(logger_name)
-model_save_name = "./out/%s/zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_rel:%.1f_rd:%.1f_ra:%.1f_ang:%d_f:%.1f_rc:%.1f_rp:%d_num:%d" % (
-    opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
-    str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.gamma_rel,
-    opt.rel_dist_ratio, opt.rel_angle_ratio, int(opt.rel_use_angle), opt.factor_dist, opt.rel_con_weight, opt.rel_proj_dim, opt.syn_num)
 
 logger.write(
-    "VSRA teacher weights | sem: %.2f con: %.2f | proj_dim: %d\n" % (
+    "VSRA teacher weights | mode: %s sem: %.2f con/max: %.2f | proj_dim: %d\n" % (
+        opt.vsra_weight_mode,
         opt.rel_sem_weight,
         opt.rel_con_weight,
         opt.rel_proj_dim,
@@ -210,6 +222,7 @@ def save_zerodiff(zerodiff, save_name, post):
                 'optimizer_D_xt': zerodiff.optimizerD_xt.state_dict(),
                 'optimizer_D_xc': zerodiff.optimizerD_xc.state_dict(),
                 'lambda1': zerodiff.lambda1,
+                'vsra_gate_state': None if zerodiff.vsra_gate is None else zerodiff.vsra_gate.state_dict(),
                 }, save_name + post + '.tar')
 
 
@@ -253,6 +266,12 @@ def load_zerodiff(zerodiff, checkpoint_path, load_optimizers=True):
     lambda1 = checkpoint.get('lambda1')
     if lambda1 is not None:
         zerodiff.lambda1 = lambda1
+
+    gate_state = checkpoint.get('vsra_gate_state')
+    if zerodiff.vsra_gate is not None and gate_state is not None:
+        zerodiff.vsra_gate.load_state_dict(gate_state)
+        if zerodiff.vsra_gate.last_output is not None:
+            zerodiff.current_rel_con_weight = zerodiff.vsra_gate.last_output.weight
 
     return checkpoint
 
@@ -497,6 +516,19 @@ class ZERODIFF(torch.nn.Module):
         self.rel_angle_ratio = opt.rel_angle_ratio
         self.rel_angle_max_samples = opt.rel_angle_max_samples
         self.rel_use_angle = opt.rel_use_angle
+        self.vsra_weight_mode = opt.vsra_weight_mode
+        self.current_rel_con_weight = self.rel_con_weight
+        total_train_steps = opt.nepoch * get_train_steps_per_epoch(data)
+        self.vsra_gate = None
+        if self.gamma_rel > 0 and self.vsra_weight_mode == "adaptive":
+            self.vsra_gate = VSRAAdaptiveGate(
+                max_weight=self.rel_con_weight,
+                ema_decay=opt.rel_gate_ema,
+                temperature=opt.rel_gate_temperature,
+                warmup_ratio=opt.rel_gate_warmup_ratio,
+                total_steps=total_train_steps,
+                eps=self.rel_eps,
+            )
 
         self.loss_mse = torch.nn.MSELoss(reduce=False)
 
@@ -530,22 +562,62 @@ class ZERODIFF(torch.nn.Module):
         self.interval_recorder_sum['criticD_test_real_xt'] = 0.0
         self.interval_recorder_sum['criticD_test_real_xc'] = 0.0
 
-    def get_vsra_teacher_features(self, att_0_real, c_teacher):
+        self.interval_recorder_sum['vsra_gate_count'] = 0
+        self.interval_recorder_sum['vsra_weight_sum'] = 0.0
+        self.interval_recorder_sum['vsra_weight_min'] = float('inf')
+        self.interval_recorder_sum['vsra_weight_max'] = 0.0
+        self.interval_recorder_sum['vsra_d_cs_sum'] = 0.0
+        self.interval_recorder_sum['vsra_d_vs_sum'] = 0.0
+        self.interval_recorder_sum['vsra_d_vc_sum'] = 0.0
+        self.interval_recorder_sum['vsra_raw_reliability_sum'] = 0.0
+        self.interval_recorder_sum['vsra_ema_reliability_sum'] = 0.0
+
+    def record_vsra_gate(self, gate_output, d_cs, d_vs, d_vc):
+        recorder = self.interval_recorder_sum
+        recorder['vsra_gate_count'] += 1
+        recorder['vsra_weight_sum'] += gate_output.weight
+        recorder['vsra_weight_min'] = min(recorder['vsra_weight_min'], gate_output.weight)
+        recorder['vsra_weight_max'] = max(recorder['vsra_weight_max'], gate_output.weight)
+        recorder['vsra_d_cs_sum'] += float(d_cs)
+        recorder['vsra_d_vs_sum'] += float(d_vs)
+        recorder['vsra_d_vc_sum'] += float(d_vc)
+        recorder['vsra_raw_reliability_sum'] += gate_output.raw_reliability
+        recorder['vsra_ema_reliability_sum'] += gate_output.ema_reliability
+
+    def get_vsra_gate_epoch_stats(self):
+        recorder = self.interval_recorder_sum
+        count = recorder['vsra_gate_count']
+        if count == 0:
+            return None
+        return {
+            'weight_mean': recorder['vsra_weight_sum'] / count,
+            'weight_min': recorder['vsra_weight_min'],
+            'weight_max': recorder['vsra_weight_max'],
+            'd_cs': recorder['vsra_d_cs_sum'] / count,
+            'd_vs': recorder['vsra_d_vs_sum'] / count,
+            'd_vc': recorder['vsra_d_vc_sum'] / count,
+            'raw_reliability': recorder['vsra_raw_reliability_sum'] / count,
+            'ema_reliability': recorder['vsra_ema_reliability_sum'] / count,
+        }
+
+    def get_vsra_teacher_features(self, att_0_real, c_teacher, con_weight=None):
         teacher_features = []
 
         if self.rel_sem_weight > 0:
             teacher_features.append((self.rel_sem_weight, att_0_real.detach()))
 
-        if self.rel_con_weight > 0 and c_teacher is not None:
-            teacher_features.append((self.rel_con_weight, c_teacher.detach()))
+        if con_weight is None:
+            con_weight = self.rel_con_weight
+        if con_weight > 0 and c_teacher is not None:
+            teacher_features.append((con_weight, c_teacher.detach()))
 
         return teacher_features
 
-    def compute_vsra_losses(self, student_features, att_0_real, c_teacher):
+    def compute_vsra_losses(self, student_features, att_0_real, c_teacher, con_weight=None):
         vsra_distance_loss = torch.tensor(0.0, device=self.device)
         vsra_angle_loss = torch.tensor(0.0, device=self.device)
 
-        for teacher_weight, teacher_features in self.get_vsra_teacher_features(att_0_real, c_teacher):
+        for teacher_weight, teacher_features in self.get_vsra_teacher_features(att_0_real, c_teacher, con_weight):
             vsra_distance_loss += teacher_weight * rkd_distance_loss(student_features, teacher_features, self.rel_eps)
             if self.rel_use_angle:
                 vsra_angle_loss += teacher_weight * rkd_angle_loss(
@@ -575,6 +647,22 @@ class ZERODIFF(torch.nn.Module):
         anchor_angle_loss = self.rel_angle_ratio * anchor_angle_loss
         anchor_loss = anchor_distance_loss + anchor_angle_loss
         return anchor_distance_loss, anchor_angle_loss, anchor_loss
+
+    def compute_relation_pair_losses(self, student_features, teacher_features):
+        distance_loss = self.rel_dist_ratio * rkd_distance_loss(
+            student_features,
+            teacher_features.detach(),
+            self.rel_eps,
+        )
+        angle_loss = torch.tensor(0.0, device=self.device)
+        if self.rel_use_angle:
+            angle_loss = self.rel_angle_ratio * rkd_angle_loss(
+                student_features,
+                teacher_features.detach(),
+                self.rel_eps,
+                self.rel_angle_max_samples,
+            )
+        return distance_loss, angle_loss, distance_loss + angle_loss
 
     def build_relation_teacher(self, att_0_real, con_0_real):
         with torch.no_grad():
@@ -606,14 +694,43 @@ class ZERODIFF(torch.nn.Module):
         r_0_teacher = self.build_relation_teacher(att_0_real, con_0_real)
         c_teacher = self.netCTeacherEmbed(r_0_teacher)
         q_0_real = self.netRelProj(x_0_real)
-        real_vsra_distance_loss, real_vsra_angle_loss, real_vsra_loss = self.compute_vsra_losses(
-            q_0_real,
-            att_0_real,
-            c_teacher,
-        )
-        c_anchor_distance_loss, c_anchor_angle_loss, _ = self.compute_semantic_anchor_losses(c_teacher, att_0_real)
-        real_vsra_distance_loss = real_vsra_distance_loss + c_anchor_distance_loss
-        real_vsra_angle_loss = real_vsra_angle_loss + c_anchor_angle_loss
+
+        if self.vsra_gate is not None:
+            sem_distance_loss, sem_angle_loss, d_vs = self.compute_relation_pair_losses(q_0_real, att_0_real)
+            con_distance_loss, con_angle_loss, d_vc = self.compute_relation_pair_losses(q_0_real, c_teacher)
+            anchor_distance_loss, anchor_angle_loss, d_cs = self.compute_relation_pair_losses(c_teacher, att_0_real)
+            gate_output = self.vsra_gate.update(
+                d_cs.detach().item(),
+                d_vs.detach().item(),
+                d_vc.detach().item(),
+            )
+            self.current_rel_con_weight = gate_output.weight
+            self.record_vsra_gate(
+                gate_output,
+                d_cs.detach().item(),
+                d_vs.detach().item(),
+                d_vc.detach().item(),
+            )
+            real_vsra_distance_loss = (
+                self.rel_sem_weight * sem_distance_loss
+                + self.current_rel_con_weight * con_distance_loss
+                + self.current_rel_con_weight * anchor_distance_loss
+            )
+            real_vsra_angle_loss = (
+                self.rel_sem_weight * sem_angle_loss
+                + self.current_rel_con_weight * con_angle_loss
+                + self.current_rel_con_weight * anchor_angle_loss
+            )
+        else:
+            self.current_rel_con_weight = self.rel_con_weight
+            real_vsra_distance_loss, real_vsra_angle_loss, _ = self.compute_vsra_losses(
+                q_0_real,
+                att_0_real,
+                c_teacher,
+            )
+            c_anchor_distance_loss, c_anchor_angle_loss, _ = self.compute_semantic_anchor_losses(c_teacher, att_0_real)
+            real_vsra_distance_loss = real_vsra_distance_loss + c_anchor_distance_loss
+            real_vsra_angle_loss = real_vsra_angle_loss + c_anchor_angle_loss
         real_vsra_loss = real_vsra_distance_loss + real_vsra_angle_loss
         (self.gamma_rel * real_vsra_loss).backward()
         self.optimizerRelProj.step()
@@ -631,7 +748,8 @@ class ZERODIFF(torch.nn.Module):
             return vsra_distance_loss, vsra_angle_loss, vsra_loss
 
         q_0_fake = self.netRelProj(x_0_fake)
-        return self.compute_vsra_losses(q_0_fake, att_0_real, c_teacher)
+        con_weight = self.current_rel_con_weight if self.vsra_weight_mode == "adaptive" else None
+        return self.compute_vsra_losses(q_0_fake, att_0_real, c_teacher, con_weight=con_weight)
 
     def forward(self):
         gp_sum = 0  # Running sum used for adaptive lambda scaling.
@@ -937,6 +1055,7 @@ for epoch in range(0, opt.nepoch):
     criticD_train_fake_x0 = zerodiff.interval_recorder_sum['criticD_train_fake_x0'].item() / n_iter
     criticD_train_fake_xt = zerodiff.interval_recorder_sum['criticD_train_fake_xt'].item() / n_iter
     criticD_train_fake_xc = zerodiff.interval_recorder_sum['criticD_train_fake_xc'].item() / n_iter
+    vsra_gate_stats = zerodiff.get_vsra_gate_epoch_stats()
     zerodiff.init_recorder()
 
     log_message('[%d/%d] D_train_real_x0: %.6f, D_train_real_xt: %.6f, D_train_real_xc: %.6f' % (
@@ -947,6 +1066,23 @@ for epoch in range(0, opt.nepoch):
 
     log_message('[%d/%d] D_train_fake_x0: %.6f, D_train_fake_xt: %.6f, D_train_fake_xc: %.6f' % (
         epoch, opt.nepoch, criticD_train_fake_x0, criticD_train_fake_xt, criticD_train_fake_xc))
+
+    if vsra_gate_stats is not None:
+        log_message(
+            '[%d/%d] VSRA_gate weight(mean/min/max): %.6f/%.6f/%.6f, '
+            'd_cs: %.6f, d_vs: %.6f, d_vc: %.6f, reliability(raw/ema): %.6f/%.6f' % (
+                epoch,
+                opt.nepoch,
+                vsra_gate_stats['weight_mean'],
+                vsra_gate_stats['weight_min'],
+                vsra_gate_stats['weight_max'],
+                vsra_gate_stats['d_cs'],
+                vsra_gate_stats['d_vs'],
+                vsra_gate_stats['d_vc'],
+                vsra_gate_stats['raw_reliability'],
+                vsra_gate_stats['ema_reliability'],
+            )
+        )
 
     if epoch % opt.eval_interval == 0 or epoch == (opt.nepoch - 1):
         zerodiff.eval()

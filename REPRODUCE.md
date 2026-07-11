@@ -245,3 +245,27 @@ DFG 脚本内部会通过 `--netR_model_path` 指向前一步 DRG 产生的权�
 - 当前仓库的语义嵌入设置仍然是：`CUB` 使用 `sent`，`AWA2` 和 `SUN` 使用 `att`。
 - `DFG` 会自动在 `./out/<dataset>/` 中寻找可用的 `DRG` checkpoint，所以更稳妥的做法仍然是先完成同数据集的 `DRG` 训练，再运行对应 `DFG` 脚本。
 - 当前仓库已经兼容现代 PyTorch，且 `DRG` 保存的 checkpoint 已同时兼容 `state_dict_R` 和 `state_dict_G_con`。
+
+## 7. VSRA 固定权重消融与自适应门控
+
+固定权重消融默认覆盖 CUB、AWA2、SUN，以及 `0、0.1、0.25、0.5、1.0` 五个 `rel_con_weight`：
+
+```bash
+python scripts/sweep_rel_con_weight.py --dry-run
+python scripts/sweep_rel_con_weight.py
+```
+
+结果逐次写入 `out/vsra_rel_con_sweep.csv`。中断后可使用 `--skip-existing` 跳过 CSV 中已经完成的组合，也可以用 `--datasets AWA2` 或 `--weights 0.1 0.25` 缩小实验范围。
+
+自适应 VSRA 保持 S teacher 权重不变，将 `rel_con_weight` 解释为 C teacher 权重上限：
+
+```bash
+python scripts/run_awa2_zerodiff_DFG_train.py \
+  --vsra-weight-mode adaptive \
+  --rel-con-weight 1.0 \
+  --rel-gate-ema 0.99 \
+  --rel-gate-temperature 1.0 \
+  --rel-gate-warmup-ratio 0.1
+```
+
+训练日志会额外输出动态 C 权重的 mean/min/max、`d_cs/d_vs/d_vc` 以及 raw/EMA reliability。新 checkpoint 保存门控进度与 EMA；加载不包含这些字段的旧 checkpoint 时会从新的门控状态开始。

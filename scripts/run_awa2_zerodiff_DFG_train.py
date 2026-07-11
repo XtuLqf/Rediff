@@ -4,9 +4,18 @@
 @author: ZihanYe
 """
 import os
+import argparse
 import subprocess
 import sys
 from pathlib import Path
+
+parser = argparse.ArgumentParser(description='Run AWA2 DFG training.')
+parser.add_argument('--rel-con-weight', type=float, default=1.0)
+parser.add_argument('--vsra-weight-mode', choices=('fixed', 'adaptive'), default='fixed')
+parser.add_argument('--rel-gate-ema', type=float, default=0.99)
+parser.add_argument('--rel-gate-temperature', type=float, default=1.0)
+parser.add_argument('--rel-gate-warmup-ratio', type=float, default=0.1)
+args = parser.parse_args()
 
 ROOT = Path(__file__).resolve().parents[1]
 DATAROOT = ROOT / 'Dataset'
@@ -45,7 +54,9 @@ command = [
 	'--gamma_ADV', '10', '--gamma_VAE', '1.0', '--embed_type', 'VA',
 	'--n_T', '4', '--dim_t', '85', '--gamma_x0', '1.0', '--gamma_xt', '1.0',
 	'--split_percent', '100', '--syn_num', '5400', '--gamma_dist', '5.0', '--factor_dist', '1.5',
-	'--gamma_rel', '1.0', '--rel_sem_weight', '1.0', '--rel_con_weight', '1.0', '--rel_proj_dim', '512',
+	'--gamma_rel', '1.0', '--rel_sem_weight', '1.0', '--rel_con_weight', str(args.rel_con_weight), '--rel_proj_dim', '512',
+	'--vsra_weight_mode', args.vsra_weight_mode, '--rel_gate_ema', str(args.rel_gate_ema),
+	'--rel_gate_temperature', str(args.rel_gate_temperature), '--rel_gate_warmup_ratio', str(args.rel_gate_warmup_ratio),
 	'--rel_dist_ratio', '1.0', '--rel_angle_ratio', '2.0', '--rel_angle_max_samples', '128', '--rel_use_angle',
 	'--netR_model_path', str(NETR_MODEL),
 ]

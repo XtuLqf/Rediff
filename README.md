@@ -72,6 +72,24 @@ If you want to continue training from a saved DFG checkpoint, pass `--netG_model
 
 Current DFG scripts in this repository also enable a REGZSL-inspired relation transfer stage during the generator phase. The generator still produces visual features from semantic attributes and contrastive conditions, while a dedicated relation embedding head is first updated on real visual features and then reused to constrain fake features with semantic (`S`) and contrastive (`C`) teachers. The current implementation intentionally removes the extra real-visual teacher; real visual features now participate by defining the relation space itself. During training, the contrastive teacher is linked to the current batch by running the frozen DRG generator on a noised version of the real contrastive feature and then mapping the resulting `r_0_teacher` through an independent `C`-teacher embedder before applying RKD. During sampling, DFG still uses DRG-generated fake `C` as its generation condition.
 
+### VSRA weight sweep and adaptive gating
+
+The dataset DFG launchers accept `--rel-con-weight` and `--vsra-weight-mode`. Fixed mode preserves the original VSRA weighting. Adaptive mode treats `rel_con_weight` as an upper bound and derives the batch weight from C/S disagreement and the relative real-V alignment of the two teachers, followed by EMA smoothing and a linear warmup.
+
+Run the fixed-weight grid for all three datasets with:
+
+```bash
+python scripts/sweep_rel_con_weight.py
+```
+
+The default grid is `0 0.1 0.25 0.5 1.0`. Use `--dry-run` to inspect all commands and `--skip-existing` to reuse completed entries in `out/vsra_rel_con_sweep.csv`. An adaptive run can be launched directly, for example:
+
+```bash
+python scripts/run_awa2_zerodiff_DFG_train.py --vsra-weight-mode adaptive --rel-con-weight 1.0
+```
+
+Adaptive controls are `--rel-gate-ema` (default `0.99`), `--rel-gate-temperature` (default `1.0`), and `--rel-gate-warmup-ratio` (default `0.1`). Gate EMA and progress are saved in new checkpoints; older DFG checkpoints remain loadable and initialize a fresh gate state.
+
 ## Results
 Following table shows the results of our released models using various evaluation protocols on three datasets, both in the ZSL and GZSL settings:
 
