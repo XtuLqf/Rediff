@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import torch
 import torch.nn.functional as F
@@ -21,7 +21,7 @@ def weighted_l1_attributes(prediction: torch.Tensor, target: torch.Tensor) -> to
 class BaselineRuntime:
     """Loads only modules that exist in the clean d9da5ab DFG checkpoint."""
 
-    def __init__(self, options, checkpoint_path: str | Path, device: str = "cpu"):
+    def __init__(self, options, checkpoint_path: Union[str, Path], device: str = "cpu"):
         self.options = options
         self.device = torch.device(device)
         self.n_T = int(options.n_T)
