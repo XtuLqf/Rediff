@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Union
 
 import numpy as np
 import torch
@@ -18,7 +18,7 @@ class Episode:
     labels: torch.Tensor
     indices: torch.Tensor
 
-    def to(self, device: torch.device | str) -> "Episode":
+    def to(self, device: Union[torch.device, str]) -> "Episode":
         return Episode(
             visual=self.visual.to(device),
             contrastive=self.contrastive.to(device),
@@ -77,4 +77,3 @@ def sample_balanced_episode(
         labels=labels.clone(),
         indices=indices.clone(),
     )
-

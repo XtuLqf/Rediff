@@ -6,7 +6,7 @@ import argparse
 import csv
 import json
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 import torch
 
@@ -38,7 +38,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def flatten_gradients(
-    gradients: Iterable[torch.Tensor | None], parameters: Iterable[torch.nn.Parameter]
+    gradients: Iterable[Optional[torch.Tensor]], parameters: Iterable[torch.nn.Parameter]
 ) -> torch.Tensor:
     values: List[torch.Tensor] = []
     for gradient, parameter in zip(gradients, parameters):
@@ -203,4 +203,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -47,6 +47,7 @@ command = [
 	'--split_percent', '100', '--syn_num', '5400', '--gamma_dist', '5.0', '--factor_dist', '1.5',
 	'--netR_model_path', str(NETR_MODEL),
 ]
+command.extend(sys.argv[1:])
 
 subprocess.run(command, cwd=ROOT, check=True, env=env)
 

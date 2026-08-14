@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping
+from typing import Any, Dict, Iterable, Mapping, Union
 
 import torch
 
@@ -16,6 +16,7 @@ FORBIDDEN_KEY_FRAGMENTS = (
     "vsra",
     "rel_gate",
     "optimizerrel",
+    "method_metadata",
 )
 
 REQUIRED_DFG_KEYS = (
@@ -31,7 +32,7 @@ class ContaminatedCheckpointError(ValueError):
     """Raised when a checkpoint contains post-baseline relation modules."""
 
 
-def checkpoint_sha256(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
+def checkpoint_sha256(path: Union[str, Path], chunk_size: int = 1024 * 1024) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
         while True:
@@ -72,8 +73,8 @@ def validate_baseline_checkpoint(
 
 
 def load_baseline_checkpoint(
-    path: str | Path,
-    map_location: str | torch.device = "cpu",
+    path: Union[str, Path],
+    map_location: Union[str, torch.device] = "cpu",
     required_keys: Iterable[str] = REQUIRED_DFG_KEYS,
 ) -> Dict[str, Any]:
     checkpoint_path = Path(path)
@@ -84,4 +85,3 @@ def load_baseline_checkpoint(
         raise TypeError("Expected a dictionary checkpoint.")
     validate_baseline_checkpoint(checkpoint, required_keys=required_keys)
     return checkpoint
-

@@ -29,6 +29,7 @@ def test_clean_checkpoint_is_accepted():
         "state_dict_CTeacherEmbed",
         "vsra_gate_state",
         "optimizerRelProj",
+        "method_metadata",
     ),
 )
 def test_relation_augmented_checkpoints_are_rejected(key):
@@ -36,4 +37,3 @@ def test_relation_augmented_checkpoints_are_rejected(key):
     checkpoint[key] = {}
     with pytest.raises(ContaminatedCheckpointError):
         validate_baseline_checkpoint(checkpoint)
-

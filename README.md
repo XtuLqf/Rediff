@@ -59,6 +59,10 @@ Firstly, download these datasets as well as the xlsa17 and our data splitting an
 
 ## Training
 
+The isolated baseline diagnostics are documented in `diagnostics/README.md`.
+The time-aware multi-granularity relation-consistency method and its ablation
+order are documented in `RELATION_CONSISTENCY.md`.
+
 To train and evaluate ZSL and GZSL models, please run the file `./scripts/train_awa2_zerodiff_DRG.py` then the scripts `./scripts/train_awa2_zerodiff_DFG`, e.g.:
 ```
 python ./scripts/train_awa2_zerodiff_DRG.py
