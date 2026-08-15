@@ -24,7 +24,11 @@ for candidate in NETR_MODEL_CANDIDATES:
 		NETR_MODEL = candidate
 		break
 else:
-	available = sorted(OUT_DIR.glob('*.tar')) if OUT_DIR.exists() else []
+	available = (
+		sorted(OUT_DIR.glob('*DRG*.tar'))
+		+ sorted(OUT_DIR.glob('diffzero_pretrain*.tar'))
+		if OUT_DIR.exists() else []
+	)
 	if available:
 		NETR_MODEL = available[0]
 	else:

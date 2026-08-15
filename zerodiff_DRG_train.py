@@ -75,7 +75,9 @@ if opt.cuda:
 
 
 def loss_fn(recon_x, x, mean, log_var):
-    BCE = torch.nn.functional.binary_cross_entropy(recon_x + 1e-12, x.detach(), size_average=False)
+    BCE = torch.nn.functional.binary_cross_entropy(
+        recon_x + 1e-12, x.detach(), reduction="sum"
+    )
     BCE = BCE.sum() / x.size(0)
     KLD = -0.5 * torch.sum(1 + log_var - mean.pow(2) - log_var.exp()) / x.size(0)
     return (BCE + KLD)

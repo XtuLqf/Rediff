@@ -80,7 +80,15 @@ def load_baseline_checkpoint(
     checkpoint_path = Path(path)
     if not checkpoint_path.is_file():
         raise FileNotFoundError(checkpoint_path)
-    checkpoint = torch.load(checkpoint_path, map_location=map_location)
+    try:
+        checkpoint = torch.load(
+            checkpoint_path,
+            map_location=map_location,
+            weights_only=True,
+        )
+    except TypeError:
+        # Compatibility fallback for the original PyTorch 1.12 environment.
+        checkpoint = torch.load(checkpoint_path, map_location=map_location)
     if not isinstance(checkpoint, dict):
         raise TypeError("Expected a dictionary checkpoint.")
     validate_baseline_checkpoint(checkpoint, required_keys=required_keys)

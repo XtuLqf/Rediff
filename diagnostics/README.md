@@ -19,6 +19,20 @@ the diagnostic runtime uses a seeded random latent and records
 ZeroDiff feature synthesis, but the limitation must be disclosed when interpreting
 the counterfactual training-gradient probe.
 
+## Target Linux environment
+
+The code is compatible with Python 3.10, PyTorch 2.9.1+cu130, torchvision
+0.24.1+cu130, RTX 5090, and NVIDIA driver 580.126.09. Plotting additionally
+requires Matplotlib, which is not included in the base experiment dependencies:
+
+```bash
+pip install matplotlib==3.7.5 pytest==7.4.4
+```
+
+Both plotting commands accept multiple metrics CSV files after `--metrics` and
+pool them. Use this to aggregate several random seeds rather than treating the
+episodes from one seed as the only source of uncertainty.
+
 ## 1. Export controlled timestep trajectories
 
 Run from the repository root in the same PyTorch environment used for ZeroDiff:
@@ -48,6 +62,7 @@ python -m diagnostics.plot_relation_drift \
 ```
 
 This produces class/instance relation heatmaps and dataset-level timestep curves.
+The filenames are `relation_heatmaps.png` and `relation_curves.png`.
 
 ## 3. Probe gradient interference without training
 
@@ -72,6 +87,8 @@ python -m diagnostics.plot_gradient_conflicts \
   --output out/diagnostics/baseline/AWA2/<hash>/figures/gradient_conflicts.png
 ```
 
+The third paper figure is `gradient_conflicts.png`.
+
 ## Interpretation rules
 
 Do not claim timestep-dependent applicability unless the class and instance curves
@@ -79,4 +96,3 @@ show reproducible differences across episodes, datasets, and seeds. Do not claim
 gradient conflict unless negative cosine frequency is substantial and stable. A
 single selected episode is only a visualization; paper claims must use the
 multi-episode CSV statistics.
-
