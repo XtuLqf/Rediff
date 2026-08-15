@@ -6,6 +6,8 @@ import argparse
 import csv
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -13,7 +15,13 @@ import numpy as np
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Plot offline relation diagnostics.")
     parser.add_argument("--trajectory", type=Path, required=True)
-    parser.add_argument("--metrics", type=Path, required=True)
+    parser.add_argument(
+        "--metrics",
+        type=Path,
+        nargs="+",
+        required=True,
+        help="one or more metrics.csv files; multiple seeds are pooled",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--episode", type=int, default=0)
     return parser.parse_args()
@@ -93,7 +101,7 @@ def main() -> None:
     figure.savefig(args.output_dir / "relation_heatmaps.png", dpi=220, bbox_inches="tight")
     plt.close(figure)
 
-    rows = load_rows(args.metrics)
+    rows = [row for metrics_path in args.metrics for row in load_rows(metrics_path)]
     figure, axis = plt.subplots(figsize=(6.8, 4.4))
     for key, label, color in (
         ("class_relation_spearman", "Class-semantic consistency", "#1f77b4"),
@@ -116,4 +124,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

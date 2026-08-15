@@ -79,7 +79,9 @@ if opt.cuda:
 
 
 def loss_fn(recon_x, x, mean, log_var):
-    Recon = torch.nn.functional.binary_cross_entropy(recon_x + 1e-12, x.detach(), size_average=False)
+    Recon = torch.nn.functional.binary_cross_entropy(
+        recon_x + 1e-12, x.detach(), reduction="sum"
+    )
     Recon = Recon.sum() / x.size(0)
     # Recon = torch.nn.functional.mse_loss(recon_x, x.detach(), size_average=False)
     # Recon = Recon.sum() / x.size(0)
@@ -193,13 +195,21 @@ class ZERODIFF(torch.nn.Module):
         self.gamma_dist = opt.gamma_dist
         self.factor_dist = opt.factor_dist
 
-        self.loss_mse = torch.nn.MSELoss(reduce=False)
+        self.loss_mse = torch.nn.MSELoss(reduction="none")
 
         self.batch_size = opt.batch_size
         self.data = data
 
         self.netR = zerodiff_tools.DRG_Generator(opt).to(self.device)
-        netR_state_dict = torch.load(netR_model_path, map_location=self.device)
+        try:
+            netR_state_dict = torch.load(
+                netR_model_path,
+                map_location=self.device,
+                weights_only=True,
+            )
+        except TypeError:
+            # Compatibility fallback for the original PyTorch 1.12 environment.
+            netR_state_dict = torch.load(netR_model_path, map_location=self.device)
         netR_weights = netR_state_dict.get('state_dict_G_con') or netR_state_dict.get('state_dict_R')
         if netR_weights is None:
             raise KeyError("netR checkpoint must contain 'state_dict_G_con' or 'state_dict_R'.")

@@ -6,21 +6,31 @@ import argparse
 import csv
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Plot offline gradient diagnostics.")
-    parser.add_argument("--metrics", type=Path, required=True)
+    parser.add_argument(
+        "--metrics",
+        type=Path,
+        nargs="+",
+        required=True,
+        help="one or more gradient_metrics.csv files; multiple seeds are pooled",
+    )
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    with args.metrics.open("r", newline="", encoding="utf-8") as stream:
-        rows = list(csv.DictReader(stream))
+    rows = []
+    for metrics_path in args.metrics:
+        with metrics_path.open("r", newline="", encoding="utf-8") as stream:
+            rows.extend(csv.DictReader(stream))
     timesteps = sorted({int(row["timestep"]) for row in rows})
     pairs = (
         ("cos_class_base", "conflict_class_base", "Class relation vs. base", "#1f77b4"),
@@ -76,4 +86,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
