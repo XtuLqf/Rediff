@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split-percent", type=int, default=100)
     parser.add_argument("--ways", type=int, default=8)
     parser.add_argument("--shots", type=int, default=8)
-    parser.add_argument("--episodes", type=int, default=10)
+    parser.add_argument("--episodes", type=int, default=30)
     parser.add_argument("--seed", type=int, default=20260814)
     parser.add_argument("--device", default="auto")
     return parser.parse_args()
@@ -121,7 +121,12 @@ def main() -> None:
             episode.labels,
         )
         for row in rows:
-            row.update(episode=episode_id, episode_seed=episode_seed)
+            row.update(
+                episode=episode_id,
+                episode_seed=episode_seed,
+                diagnostic_seed=args.seed,
+                episode_uid=f"{args.seed}:{episode_id}",
+            )
             metric_rows.append(row)
 
         stored["predictions"].append(
@@ -160,6 +165,7 @@ def main() -> None:
         "device": device,
         "latent_source": runtime.latent_source,
         "noise_coupling": "shared_epsilon_closed_form_marginals",
+        "evaluation_unit": "balanced_episode_paired_across_timesteps",
         "timestep_order": list(range(options.n_T)),
         "vsra_used": False,
         "relation_projector_used": False,
@@ -173,4 +179,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

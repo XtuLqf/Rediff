@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
@@ -136,6 +135,51 @@ def temporal_relation_correlation(
     )
 
 
+def class_temporal_relation_correlation(
+    current: torch.Tensor,
+    previous: torch.Tensor,
+    labels: torch.Tensor,
+) -> float:
+    current_prototypes, _ = class_prototypes(current, labels)
+    previous_prototypes, _ = class_prototypes(previous, labels)
+    return safe_spearman(
+        upper_triangle(pairwise_distances(current_prototypes)),
+        upper_triangle(pairwise_distances(previous_prototypes)),
+    )
+
+
+def instance_temporal_relation_correlation(
+    current: torch.Tensor,
+    previous: torch.Tensor,
+    labels: torch.Tensor,
+) -> float:
+    current_vector, previous_vector = _within_class_vectors(current, previous, labels)
+    return safe_spearman(current_vector, previous_vector)
+
+
+def class_temporal_relation_loss(
+    current: torch.Tensor,
+    previous: torch.Tensor,
+    labels: torch.Tensor,
+) -> torch.Tensor:
+    current_prototypes, _ = class_prototypes(current, labels)
+    previous_prototypes, _ = class_prototypes(previous, labels)
+    current_relation = normalize_relation(pairwise_distances(current_prototypes))
+    previous_relation = normalize_relation(pairwise_distances(previous_prototypes)).detach()
+    return F.smooth_l1_loss(current_relation, previous_relation)
+
+
+def instance_temporal_relation_loss(
+    current: torch.Tensor,
+    previous: torch.Tensor,
+    labels: torch.Tensor,
+) -> torch.Tensor:
+    current_vector, previous_vector = _within_class_vectors(current, previous, labels)
+    if not current_vector.numel():
+        return current.sum() * 0.0
+    return F.smooth_l1_loss(current_vector, previous_vector)
+
+
 def timestep_metrics(
     predictions: Iterable[torch.Tensor],
     attributes: torch.Tensor,
@@ -146,6 +190,26 @@ def timestep_metrics(
     previous = None
     for timestep, prediction in enumerate(predictions):
         temporal = float("nan") if previous is None else temporal_relation_correlation(prediction, previous)
+        adjacent_class = (
+            float("nan")
+            if previous is None
+            else class_temporal_relation_correlation(prediction, previous, labels)
+        )
+        adjacent_instance = (
+            float("nan")
+            if previous is None
+            else instance_temporal_relation_correlation(prediction, previous, labels)
+        )
+        adjacent_class_loss = (
+            float("nan")
+            if previous is None
+            else float(class_temporal_relation_loss(prediction, previous, labels).detach().cpu())
+        )
+        adjacent_instance_loss = (
+            float("nan")
+            if previous is None
+            else float(instance_temporal_relation_loss(prediction, previous, labels).detach().cpu())
+        )
         rows.append(
             {
                 "timestep": timestep,
@@ -157,6 +221,16 @@ def timestep_metrics(
                 ),
                 "adjacent_relation_spearman": temporal,
                 "adjacent_relation_drift": float("nan") if previous is None else 1.0 - temporal,
+                "adjacent_class_spearman": adjacent_class,
+                "adjacent_instance_spearman": adjacent_instance,
+                "adjacent_class_drift": (
+                    float("nan") if previous is None else 1.0 - adjacent_class
+                ),
+                "adjacent_instance_drift": (
+                    float("nan") if previous is None else 1.0 - adjacent_instance
+                ),
+                "adjacent_class_loss": adjacent_class_loss,
+                "adjacent_instance_loss": adjacent_instance_loss,
                 "class_relation_loss": float(
                     class_relation_loss(prediction, attributes, labels).detach().cpu()
                 ),
@@ -167,4 +241,3 @@ def timestep_metrics(
         )
         previous = prediction
     return rows
-

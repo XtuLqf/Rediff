@@ -7,8 +7,12 @@ torch = pytest.importorskip("torch")
 from diagnostics.relation_metrics import (  # noqa: E402
     class_relation_correlation,
     class_relation_loss,
+    class_temporal_relation_correlation,
+    class_temporal_relation_loss,
     instance_relation_correlation,
     instance_relation_loss,
+    instance_temporal_relation_correlation,
+    instance_temporal_relation_loss,
     temporal_relation_correlation,
 )
 
@@ -33,6 +37,10 @@ def test_identical_relations_have_zero_loss_and_unit_correlation():
     assert class_relation_correlation(visual, attributes, labels) == pytest.approx(1.0)
     assert instance_relation_correlation(visual, contrastive, labels) == pytest.approx(1.0)
     assert temporal_relation_correlation(visual, visual.clone()) == pytest.approx(1.0)
+    assert class_temporal_relation_correlation(visual, visual.clone(), labels) == pytest.approx(1.0)
+    assert instance_temporal_relation_correlation(visual, visual.clone(), labels) == pytest.approx(1.0)
+    assert float(class_temporal_relation_loss(visual, visual.clone(), labels)) == pytest.approx(0.0)
+    assert float(instance_temporal_relation_loss(visual, visual.clone(), labels)) == pytest.approx(0.0)
 
 
 def test_relation_losses_backpropagate_to_visual_features():
@@ -44,4 +52,3 @@ def test_relation_losses_backpropagate_to_visual_features():
     loss.backward()
     assert visual.grad is not None
     assert torch.isfinite(visual.grad).all()
-

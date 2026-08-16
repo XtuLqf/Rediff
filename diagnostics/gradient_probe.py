@@ -6,7 +6,7 @@ import argparse
 import csv
 import json
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
 
 import torch
 
@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split-percent", type=int, default=100)
     parser.add_argument("--ways", type=int, default=8)
     parser.add_argument("--shots", type=int, default=8)
-    parser.add_argument("--episodes", type=int, default=10)
+    parser.add_argument("--episodes", type=int, default=30)
     parser.add_argument("--seed", type=int, default=20260814)
     parser.add_argument("--device", default="auto")
     return parser.parse_args()
@@ -70,6 +70,26 @@ def cosine(left: torch.Tensor, right: torch.Tensor) -> float:
     if float(denominator) == 0.0:
         return float("nan")
     return float(torch.dot(left, right) / denominator)
+
+
+def project_relation_against_base(
+    relation: torch.Tensor,
+    base: torch.Tensor,
+    eps: float = 1e-12,
+) -> Tuple[torch.Tensor, float, float, float]:
+    """Counterfactually remove only the component opposing the base gradient."""
+    dot = torch.dot(relation, base)
+    active = float(dot < 0)
+    projected = relation
+    if active:
+        projected = relation - dot / base.square().sum().clamp_min(eps) * base
+    denominator = relation.norm().clamp_min(eps)
+    retained_ratio = float(projected.norm() / denominator)
+    opposing_ratio = float(
+        (-dot).clamp_min(0.0)
+        / (relation.norm() * base.norm()).clamp_min(eps)
+    )
+    return projected, active, retained_ratio, opposing_ratio
 
 
 def main() -> None:
@@ -144,10 +164,18 @@ def main() -> None:
             cos_sem_base = cosine(semantic_gradient, base_gradient)
             cos_con_base = cosine(contrastive_gradient, base_gradient)
             cos_sem_con = cosine(semantic_gradient, contrastive_gradient)
+            projected_semantic, class_anchor_active, class_retained, class_removed = (
+                project_relation_against_base(semantic_gradient, base_gradient)
+            )
+            projected_contrastive, instance_anchor_active, instance_retained, instance_removed = (
+                project_relation_against_base(contrastive_gradient, base_gradient)
+            )
             rows.append(
                 {
                     "episode": episode_id,
                     "episode_seed": episode_seed,
+                    "diagnostic_seed": args.seed,
+                    "episode_uid": f"{args.seed}:{episode_id}",
                     "timestep": timestep,
                     "base_loss": float(base_losses["total"].detach().cpu()),
                     "class_relation_loss": float(semantic_loss.detach().cpu()),
@@ -161,6 +189,14 @@ def main() -> None:
                     "conflict_class_base": int(cos_sem_base < 0),
                     "conflict_instance_base": int(cos_con_base < 0),
                     "conflict_class_instance": int(cos_sem_con < 0),
+                    "class_anchor_active": class_anchor_active,
+                    "instance_anchor_active": instance_anchor_active,
+                    "cos_class_base_after_anchor": cosine(projected_semantic, base_gradient),
+                    "cos_instance_base_after_anchor": cosine(projected_contrastive, base_gradient),
+                    "class_gradient_retained_ratio": class_retained,
+                    "instance_gradient_retained_ratio": instance_retained,
+                    "class_opposing_component_ratio": class_removed,
+                    "instance_opposing_component_ratio": instance_removed,
                 }
             )
 
@@ -184,6 +220,10 @@ def main() -> None:
                 "latent_source": runtime.latent_source,
                 "gradient_scope": "netG_only",
                 "gradient_update": "none_autograd_probe_only",
+                "counterfactual_reconciliation": (
+                    "one_sided_base_anchor_projection_on_conflicting_relation_gradients"
+                ),
+                "evaluation_unit": "balanced_episode_paired_across_timesteps",
                 "base_loss_note": (
                     "Uses the clean baseline generator objectives. When state_dict_E is absent, "
                     "the saved baseline cannot reproduce encoder-conditioned z, so a seeded random "
