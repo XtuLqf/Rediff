@@ -29,10 +29,11 @@ requires Matplotlib, which is not included in the base experiment dependencies:
 pip install matplotlib==3.7.5 pytest==7.4.4
 ```
 
-Both plotting commands accept multiple metrics CSV files after `--metrics` and
-pool evaluation seeds. Timestep effects are evaluated within the same balanced
-episode using paired bootstrap intervals; these are conditional on the frozen
-checkpoint and must not be described as independent model-training seeds.
+Both plotting commands accept one or more metrics CSV files after `--metrics`.
+The default is 10 balanced 8-way/8-shot episodes. All timesteps reuse the same
+samples and noise within an episode, so timestep differences are directly
+comparable. The diagnostic seed only controls episode sampling; it is not a new
+model-training seed.
 
 ## 1. Export controlled timestep trajectories
 
@@ -45,7 +46,7 @@ python -m diagnostics.export_trajectory \
   --checkpoint out/AWA2/<clean-dfg-checkpoint>.tar \
   --ways 8 \
   --shots 8 \
-  --episodes 20 \
+  --episodes 10 \
   --device cuda
 ```
 
@@ -62,9 +63,11 @@ python -m diagnostics.plot_relation_drift \
   --output-dir out/diagnostics/baseline/AWA2/<hash>/figures
 ```
 
-This produces shared-scale topology heatmaps, reference-error heatmaps, a
-four-panel topology-dynamics figure, and `topology_statistics.csv`. Adjacent-step
-stability is reported separately for class prototypes and within-class instances.
+This produces `relation_heatmaps.png` and a three-panel
+`topology_dynamics.png`. The latter shows topology fidelity, alignment error,
+and class/instance temporal stability as episode mean +/- standard deviation.
+Existing trajectory archives can be upgraded without model inference using
+`python -m diagnostics.recompute_trajectory_metrics`; see `SERVER_RUNBOOK.md`.
 
 ## 3. Probe gradient interference without training
 
@@ -75,7 +78,7 @@ python -m diagnostics.gradient_probe \
   --checkpoint out/AWA2/<clean-dfg-checkpoint>.tar \
   --ways 8 \
   --shots 8 \
-  --episodes 20 \
+  --episodes 10 \
   --device cuda
 ```
 
@@ -95,8 +98,7 @@ would remove. The probe still performs no optimizer update.
 
 ## Interpretation rules
 
-Do not claim timestep-dependent applicability unless the class and instance curves
-show reproducible differences across episodes, datasets, and seeds. Do not claim
-gradient conflict unless negative cosine frequency is substantial and stable. A
-single selected episode is only a visualization; paper claims must use the
-multi-episode CSV statistics.
+Treat this as a motivation experiment: first inspect one checkpoint with 10
+episodes. Only expand to more training seeds or datasets if the curves are
+promising enough for the final paper experiment. A single heatmap episode is
+illustrative; the curves summarize all exported episodes.
