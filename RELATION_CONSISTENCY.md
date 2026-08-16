@@ -18,6 +18,11 @@ timestep, training adds three directly measurable constraints:
    predictions at adjacent timesteps under the same episode, latent variables,
    and diffusion noise.
 
+All diagnostic and training topologies use the same definition: Euclidean
+pairwise distances in the original feature space, normalized by the mean
+off-diagonal distance. No learnable relation projector or pre-distance feature
+normalization is used.
+
 The class and instance coefficients are deterministic functions of the sampled
 timestep. There is no learned gating network. The default `uniform` mode is the
 neutral implementation check; `class_high_noise` and `instance_high_noise` are

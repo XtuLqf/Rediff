@@ -9,7 +9,6 @@ from typing import Dict, Optional
 
 def _normalized_relation_matrix(features: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     """Return a scale-normalized pairwise-distance relation matrix."""
-    features = F.normalize(features, dim=-1, eps=eps)
     relation = torch.cdist(features, features, p=2)
     if relation.shape[0] < 2:
         return relation
