@@ -30,8 +30,9 @@ pip install matplotlib==3.7.5 pytest==7.4.4
 ```
 
 Both plotting commands accept multiple metrics CSV files after `--metrics` and
-pool them. Use this to aggregate several random seeds rather than treating the
-episodes from one seed as the only source of uncertainty.
+pool evaluation seeds. Timestep effects are evaluated within the same balanced
+episode using paired bootstrap intervals; these are conditional on the frozen
+checkpoint and must not be described as independent model-training seeds.
 
 ## 1. Export controlled timestep trajectories
 
@@ -61,8 +62,9 @@ python -m diagnostics.plot_relation_drift \
   --output-dir out/diagnostics/baseline/AWA2/<hash>/figures
 ```
 
-This produces class/instance relation heatmaps and dataset-level timestep curves.
-The filenames are `relation_heatmaps.png` and `relation_curves.png`.
+This produces shared-scale topology heatmaps, reference-error heatmaps, a
+four-panel topology-dynamics figure, and `topology_statistics.csv`. Adjacent-step
+stability is reported separately for class prototypes and within-class instances.
 
 ## 3. Probe gradient interference without training
 
@@ -87,7 +89,9 @@ python -m diagnostics.plot_gradient_conflicts \
   --output out/diagnostics/baseline/AWA2/<hash>/figures/gradient_conflicts.png
 ```
 
-The third paper figure is `gradient_conflicts.png`.
+The gradient figure contains raw cosine compatibility, conflict frequency, and
+the opposing gradient magnitude that the counterfactual base-anchor projection
+would remove. The probe still performs no optimizer update.
 
 ## Interpretation rules
 

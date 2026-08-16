@@ -73,7 +73,7 @@ DRG checkpoint used as DFG conditioning input.
 The checkpoint guard checks both required ZeroDiff module keys and known
 relation/method markers. A method checkpoint fails immediately.
 
-## Generate the three motivation figures
+## Generate paper-aligned motivation diagnostics
 
 Export trajectories and gradient measurements for three seeds:
 
@@ -83,41 +83,50 @@ for SEED in 9182 19182 29182; do
   python -m diagnostics.export_trajectory \
     --dataset "$DATASET" --dataroot Dataset --checkpoint "$CLEAN_DFG" \
     --ways 8 --shots 8 --episodes 30 --seed "$SEED" --device cuda:0 \
-    --output-dir "out/diagnostics/baseline/$DATASET/seed_$SEED/trajectory"
+    --output-dir "out/diagnostics/topology_v2/$DATASET/seed_$SEED/trajectory"
 
   python -m diagnostics.gradient_probe \
     --dataset "$DATASET" --dataroot Dataset --checkpoint "$CLEAN_DFG" \
     --ways 8 --shots 8 --episodes 30 --seed "$SEED" --device cuda:0 \
-    --output-dir "out/diagnostics/baseline/$DATASET/seed_$SEED/gradients"
+    --output-dir "out/diagnostics/topology_v2/$DATASET/seed_$SEED/gradients"
 done
 ```
 
 Render one representative heatmap and pool all three seeds for the curves:
 
 ```bash
-FIG_DIR="out/diagnostics/baseline/$DATASET/paper_figures"
+FIG_DIR="out/diagnostics/topology_v2/$DATASET/paper_figures"
 
 python -m diagnostics.plot_relation_drift \
-  --trajectory "out/diagnostics/baseline/$DATASET/seed_9182/trajectory/trajectory.npz" \
+  --trajectory "out/diagnostics/topology_v2/$DATASET/seed_9182/trajectory/trajectory.npz" \
   --metrics \
-    "out/diagnostics/baseline/$DATASET/seed_9182/trajectory/metrics.csv" \
-    "out/diagnostics/baseline/$DATASET/seed_19182/trajectory/metrics.csv" \
-    "out/diagnostics/baseline/$DATASET/seed_29182/trajectory/metrics.csv" \
+    "out/diagnostics/topology_v2/$DATASET/seed_9182/trajectory/metrics.csv" \
+    "out/diagnostics/topology_v2/$DATASET/seed_19182/trajectory/metrics.csv" \
+    "out/diagnostics/topology_v2/$DATASET/seed_29182/trajectory/metrics.csv" \
   --episode 0 --output-dir "$FIG_DIR"
 
 python -m diagnostics.plot_gradient_conflicts \
   --metrics \
-    "out/diagnostics/baseline/$DATASET/seed_9182/gradients/gradient_metrics.csv" \
-    "out/diagnostics/baseline/$DATASET/seed_19182/gradients/gradient_metrics.csv" \
-    "out/diagnostics/baseline/$DATASET/seed_29182/gradients/gradient_metrics.csv" \
+    "out/diagnostics/topology_v2/$DATASET/seed_9182/gradients/gradient_metrics.csv" \
+    "out/diagnostics/topology_v2/$DATASET/seed_19182/gradients/gradient_metrics.csv" \
+    "out/diagnostics/topology_v2/$DATASET/seed_29182/gradients/gradient_metrics.csv" \
   --output "$FIG_DIR/gradient_conflicts.png"
 ```
 
+The old CSV files do not contain the granularity-specific temporal and
+base-anchor columns, so they cannot be reused with the new plotting scripts.
+The `topology_v2` directory deliberately keeps the new run separate.
+
 This creates:
 
-- `relation_heatmaps.png`: representative relation matrices at every timestep;
-- `relation_curves.png`: pooled class, instance, and adjacent-step consistency;
-- `gradient_conflicts.png`: pooled gradient cosine and conflict frequency.
+- `relation_heatmaps.png`: shared-scale class/instance topology matrices;
+- `topology_error_heatmaps.png`: absolute deviation from each reference topology;
+- `topology_dynamics.png` (also saved as `relation_curves.png`): fidelity, error,
+  granularity-specific adjacent stability, and paired endpoint effects;
+- `gradient_conflicts.png`: raw compatibility, conflict activation frequency,
+  and the magnitude removed by counterfactual base-anchor projection;
+- `topology_statistics.csv` and `gradient_statistics.csv`: numerical bootstrap
+  intervals and paired permutation results used by the figures.
 
 Repeat with `DATASET=CUB` and `DATASET=SUN`, changing `CLEAN_DFG` to the matching
 clean checkpoint. Do not reuse an AWA2 checkpoint for another dataset.
