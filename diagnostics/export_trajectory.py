@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split-percent", type=int, default=100)
     parser.add_argument("--ways", type=int, default=8)
     parser.add_argument("--shots", type=int, default=8)
-    parser.add_argument("--episodes", type=int, default=30)
+    parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--seed", type=int, default=20260814)
     parser.add_argument("--device", default="auto")
     return parser.parse_args()

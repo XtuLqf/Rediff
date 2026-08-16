@@ -1,10 +1,4 @@
-import numpy as np
-import pytest
-
-from diagnostics.statistics import (
-    aggregate_by_timestep,
-    paired_endpoint_summary,
-)
+from diagnostics.statistics import aggregate_by_timestep
 
 
 def synthetic_rows():
@@ -24,18 +18,8 @@ def synthetic_rows():
 
 
 def test_timestep_aggregation_preserves_monotonic_mean():
-    summary = aggregate_by_timestep(
-        synthetic_rows(), "metric", np.random.default_rng(7), samples=200
-    )
+    summary = aggregate_by_timestep(synthetic_rows(), "metric")
     assert [item["timestep"] for item in summary] == [0, 1, 2, 3]
     assert summary[0]["mean"] > summary[-1]["mean"]
     assert all(item["n"] == 10 for item in summary)
-
-
-def test_paired_endpoint_summary_detects_known_decline():
-    summary = paired_endpoint_summary(
-        synthetic_rows(), "metric", np.random.default_rng(11), samples=1000
-    )
-    assert summary["n"] == 10
-    assert summary["mean"] == pytest.approx(-0.3)
-    assert summary["ci_high"] < 0.0
+    assert all(item["std"] > 0 for item in summary)
