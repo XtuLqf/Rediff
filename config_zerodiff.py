@@ -50,24 +50,19 @@ parser.add_argument("--temp_con", type=float, default=0.07)
 parser.add_argument("--gamma_CON_sample", type=float, default=0.0)
 parser.add_argument("--gamma_CON_step", type=float, default=0.0)
 parser.add_argument("--factor_dist", type=float, default=1.0)
-### time-aware multi-granularity relation consistency (disabled by default)
+### time-aware VSRA (disabled by default)
 parser.add_argument("--gamma_rel", type=float, default=0.0,
-                    help="overall relation-consistency weight; 0 preserves the baseline")
+                    help="overall time-aware VSRA weight; 0 preserves the baseline")
 parser.add_argument("--rel_class_weight", type=float, default=1.0)
 parser.add_argument("--rel_instance_weight", type=float, default=1.0)
-parser.add_argument("--rel_temporal_weight", type=float, default=1.0)
 parser.add_argument("--rel_n_way", type=int, default=8,
                     help="classes per balanced relation episode")
 parser.add_argument("--rel_k_shot", type=int, default=8,
                     help="instances per class in a balanced relation episode")
-parser.add_argument("--rel_time_mode", default="uniform",
-                    choices=["uniform", "class_high_noise", "instance_high_noise", "custom"])
-parser.add_argument("--rel_class_t0", type=float, default=1.0)
-parser.add_argument("--rel_class_tT", type=float, default=1.0)
-parser.add_argument("--rel_instance_t0", type=float, default=1.0)
-parser.add_argument("--rel_instance_tT", type=float, default=1.0)
-parser.add_argument("--rel_gradient_mode", default="base_anchor", choices=["sum", "base_anchor"])
-parser.add_argument("--rel_conflict_eps", type=float, default=1e-12)
+parser.add_argument("--rel_time_mode", default="fixed",
+                    choices=["fixed", "instance_up", "instance_down"])
+parser.add_argument("--rel_time_strength", type=float, default=0.5,
+                    help="symmetric instance-weight variation around 1")
 ###
 parser.add_argument("--embed_type",  default='V', help='V/VA')
 parser.add_argument("--n_T", type=int, default=4)
@@ -91,19 +86,12 @@ opt.lambda2 = opt.lambda1
 opt.encoder_layer_sizes[0] = opt.resSize
 opt.decoder_layer_sizes[-1] = opt.resSize
 opt.latent_size = opt.attSize
-if opt.gamma_rel > 0 and opt.rel_n_way * opt.rel_k_shot != opt.batch_size:
-    parser.error("relation training requires rel_n_way * rel_k_shot == batch_size")
 if min(
     opt.rel_class_weight,
     opt.rel_instance_weight,
-    opt.rel_temporal_weight,
-    opt.rel_class_t0,
-    opt.rel_class_tT,
-    opt.rel_instance_t0,
-    opt.rel_instance_tT,
     opt.gamma_rel,
 ) < 0:
     parser.error("relation loss weights must be non-negative")
-if opt.rel_conflict_eps <= 0:
-    parser.error("rel_conflict_eps must be positive")
+if not 0.0 <= opt.rel_time_strength <= 1.0:
+    parser.error("rel_time_strength must be in [0, 1]")
 

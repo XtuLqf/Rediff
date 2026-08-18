@@ -7,9 +7,8 @@
   exporters, gradient probes, and offline plotting. Use it to train/select a
   clean baseline checkpoint and produce the motivation figures.
 - `codex/time-aware-relational-consistency` is the proposed-method branch. It
-  contains the same diagnostics plus timestep-aware class, instance, and
-  temporal relation consistency and base-anchored gradient reconciliation. Use
-  it only after the baseline evidence is fixed.
+  contains the same diagnostics plus time-aware class- and instance-level VSRA.
+  Use it only after the baseline evidence is fixed.
 
 These branches are currently local until they are pushed. From the development
 machine, publish them once:
@@ -156,12 +155,11 @@ python scripts/run_awa2_zerodiff_DFG_train.py \
   --rel_n_way 8 --rel_k_shot 8 \
   --rel_class_weight 1.0 \
   --rel_instance_weight 1.0 \
-  --rel_temporal_weight 1.0 \
-  --rel_time_mode uniform \
-  --rel_gradient_mode base_anchor
+  --rel_time_mode fixed \
+  --rel_time_strength 0.5
 ```
 
-First run `uniform`; only choose `class_high_noise`, `instance_high_noise`, or a
-`custom` schedule after inspecting the clean curves. Use `--gamma_rel 0` as the
-same-code baseline-equivalence control and `--rel_gradient_mode sum` as the
-no-conflict-reconciliation ablation.
+First run `fixed`, then compare `instance_up` and `instance_down` with the same
+`rel_time_strength`. Use `--gamma_rel 0` as the same-code baseline-equivalence
+control. Set either component weight to zero for the class-only and instance-only
+ablations.

@@ -11,19 +11,10 @@ import datasets.image_util as util
 import classifiers.classifier_images as classifier
 from config_zerodiff import opt
 import zerodiff_tools
-import torch.nn.functional as F
 from sklearn import preprocessing
 import numpy as np
-import torch.nn as nn
 import os
-import hashlib
-import json
-from relation import (
-    accumulate_relation_gradient,
-    clone_parameter_gradients,
-    multigranularity_relation_losses,
-    relation_weights,
-)
+from relation import TimeAwareVSRA
 
 class Logger(object):
     def __init__(self, filename):
@@ -47,21 +38,20 @@ relation_run_config = {
     'gamma': opt.gamma_rel,
     'class_weight': opt.rel_class_weight,
     'instance_weight': opt.rel_instance_weight,
-    'temporal_weight': opt.rel_temporal_weight,
     'n_way': opt.rel_n_way,
     'k_shot': opt.rel_k_shot,
     'time_mode': opt.rel_time_mode,
-    'class_t0': opt.rel_class_t0,
-    'class_tT': opt.rel_class_tT,
-    'instance_t0': opt.rel_instance_t0,
-    'instance_tT': opt.rel_instance_tT,
-    'gradient_mode': opt.rel_gradient_mode,
+    'time_strength': opt.rel_time_strength,
 }
 if opt.gamma_rel > 0:
-    relation_signature = hashlib.sha1(
-        json.dumps(relation_run_config, sort_keys=True).encode('utf-8')
-    ).hexdigest()[:10]
-    relation_run_suffix = f"_rel-{relation_signature}"
+    relation_run_suffix = (
+        f"_tvsra-g{opt.gamma_rel:g}"
+        f"-{opt.rel_time_mode}"
+        f"-s{opt.rel_time_strength:g}"
+        f"-c{opt.rel_class_weight:g}"
+        f"-i{opt.rel_instance_weight:g}"
+        f"-e{opt.rel_n_way}x{opt.rel_k_shot}"
+    )
 else:
     relation_run_suffix = ""
 
@@ -73,7 +63,7 @@ model_save_name = "./out/%s/zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_beta
     opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
     str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.factor_dist, opt.syn_num) + relation_run_suffix
 if opt.gamma_rel > 0:
-    relation_config_record = "Relation configuration: " + json.dumps(relation_run_config, sort_keys=True)
+    relation_config_record = "TimeAwareVSRA configuration: " + str(relation_run_config)
     print(relation_config_record)
     logger.write(relation_config_record + '\n')
 
@@ -134,8 +124,6 @@ def sample(batch_size):
 
 def sample_relation_episode(n_way, k_shot):
     """Sample a balanced seen-class episode exclusively for relation supervision."""
-    if n_way * k_shot != opt.batch_size:
-        raise ValueError("rel_n_way * rel_k_shot must equal batch_size")
     if n_way > data.seenclasses.numel():
         raise ValueError("rel_n_way exceeds the number of seen classes")
 
@@ -157,11 +145,13 @@ def sample_relation_episode(n_way, k_shot):
     batch_con = data.train_paco[episode_indices]
     batch_label = data.train_label[episode_indices]
     batch_att = data.attribute[batch_label]
-    input_res.copy_(batch_feature)
-    input_con.copy_(batch_con)
-    input_att.copy_(batch_att)
-    input_label.copy_(batch_label)
-    return input_res, input_con, input_att, input_label
+    device = input_res.device
+    return (
+        batch_feature.to(device),
+        batch_con.to(device),
+        batch_att.to(device),
+        batch_label.to(device),
+    )
 
 def sample_con(batch_size):
     idx = torch.randperm(data.ntrain)[0:batch_size]
@@ -222,8 +212,7 @@ def save_zerodiff(zerodiff, save_name, post):
                   }
     if zerodiff.relationship_enabled:
         checkpoint['method_metadata'] = {
-            'name': 'time_aware_multigranularity_relation_consistency',
-            'signature': relation_signature,
+            'name': 'time_aware_vsra',
             'config': relation_run_config,
         }
     torch.save(checkpoint, save_name + post + '.tar')
@@ -273,8 +262,13 @@ class ZERODIFF(torch.nn.Module):
             raise ValueError("rel_n_way exceeds the number of seen classes")
         if self.relationship_enabled and (opt.rel_n_way < 2 or opt.rel_k_shot < 2):
             raise ValueError("relation training requires at least 2 ways and 2 shots")
-        if self.relationship_enabled and opt.rel_temporal_weight > 0 and self.n_T < 2:
-            raise ValueError("temporal relation consistency requires n_T >= 2")
+        self.time_aware_vsra = TimeAwareVSRA(
+            n_timesteps=self.n_T,
+            class_weight=opt.rel_class_weight,
+            instance_weight=opt.rel_instance_weight,
+            time_mode=opt.rel_time_mode,
+            time_strength=opt.rel_time_strength,
+        )
 
         self.loss_mse = torch.nn.MSELoss(reduction="none")
 
@@ -312,15 +306,10 @@ class ZERODIFF(torch.nn.Module):
         self.interval_recorder_sum['criticD_test_real_xc'] = 0.0
         self.interval_recorder_sum['rel_class_loss'] = 0.0
         self.interval_recorder_sum['rel_instance_loss'] = 0.0
-        self.interval_recorder_sum['rel_temporal_loss'] = 0.0
+        self.interval_recorder_sum['rel_total_loss'] = 0.0
         self.interval_recorder_sum['rel_class_t_weight'] = 0.0
         self.interval_recorder_sum['rel_instance_t_weight'] = 0.0
-        self.interval_recorder_sum['rel_class_grad_cosine'] = 0.0
-        self.interval_recorder_sum['rel_instance_grad_cosine'] = 0.0
-        self.interval_recorder_sum['rel_temporal_grad_cosine'] = 0.0
-        self.interval_recorder_sum['rel_class_grad_conflict'] = 0.0
-        self.interval_recorder_sum['rel_instance_grad_conflict'] = 0.0
-        self.interval_recorder_sum['rel_temporal_grad_conflict'] = 0.0
+        self.interval_recorder_sum['rel_timestep'] = 0.0
 
     def forward(self):
         gp_sum = 0  # lAMBDA VARIABLE
@@ -333,12 +322,47 @@ class ZERODIFF(torch.nn.Module):
             self.lambda1 *= 1.1
         elif gp_sum < 1.001:
             self.lambda1 /= 1.1
-        if self.relationship_enabled:
-            x_0_real, con_0_real, att_0_real, label = sample_relation_episode(
-                opt.rel_n_way, opt.rel_k_shot
-            )
-        G_cost, vae_loss_seen = self.update_G(x_0_real, con_0_real, att_0_real, label)
+        G_cost, vae_loss_seen = self.update_G(x_0_real, con_0_real, att_0_real)
         return D_cost, Wasserstein_D, distill_loss, G_cost, vae_loss_seen
+
+    def compute_relation_loss(self):
+        """Run the auxiliary balanced episode without changing the base DFG batch."""
+        x_0_real, con_0_real, att_0_real, label = sample_relation_episode(
+            opt.rel_n_way,
+            opt.rel_k_shot,
+        )
+        with torch.no_grad():
+            z, _, _ = self.netE(x_0_real, att_0_real)
+        episode_timestep = torch.randint(
+            0,
+            self.n_T,
+            (1,),
+            dtype=torch.int64,
+            device=self.device,
+        )
+        timestep = episode_timestep.expand(x_0_real.shape[0])
+        _, x_tp1_real, _ = self.q_sample_pairs(x_0_real, timestep)
+        x_0_fake = self.netG(
+            z.detach(),
+            att_0_real,
+            con_0_real,
+            x_tp1_real.detach(),
+            timestep,
+        )
+        losses = self.time_aware_vsra(
+            x_0_fake,
+            att_0_real,
+            con_0_real,
+            label,
+            episode_timestep,
+        )
+        self.interval_recorder_sum['rel_class_loss'] += losses['class'].detach().item()
+        self.interval_recorder_sum['rel_instance_loss'] += losses['instance'].detach().item()
+        self.interval_recorder_sum['rel_total_loss'] += losses['total'].detach().item()
+        self.interval_recorder_sum['rel_class_t_weight'] += losses['class_weight'].detach().item()
+        self.interval_recorder_sum['rel_instance_t_weight'] += losses['instance_weight'].detach().item()
+        self.interval_recorder_sum['rel_timestep'] += episode_timestep.detach().item()
+        return losses['total']
 
     def update_D(self, x_0_real, con_0_real, att_0_real, gp_sum, label):
         for p in self.netE.parameters():
@@ -442,7 +466,7 @@ class ZERODIFF(torch.nn.Module):
 
         return D_cost, Wasserstein_D, gp_sum, distill_loss
 
-    def update_G(self, x_0_real, con_0_real, att_0_real, label):
+    def update_G(self, x_0_real, con_0_real, att_0_real):
         for p in self.netE.parameters():
             p.requires_grad = True
         for p in self.netG.parameters():
@@ -462,17 +486,8 @@ class ZERODIFF(torch.nn.Module):
 
         z, means, log_var = self.netE(x_0_real, att_0_real)
 
-        if self.relationship_enabled:
-            episode_timestep = torch.randint(0, self.n_T, (1,), dtype=torch.int64, device=self.device)
-            _ts_feat = episode_timestep.expand(self.batch_size)
-            q_noise = torch.randn_like(x_0_real)
-            step_noise = torch.randn_like(x_0_real)
-            x_t_real, x_tp1_real, _ = self.q_sample_pairs(
-                x_0_real, _ts_feat, q_noise=q_noise, step_noise=step_noise
-            )
-        else:
-            _ts_feat = torch.randint(0, self.n_T, (self.batch_size,), dtype=torch.int64).to(self.device)
-            x_t_real, x_tp1_real, _ = self.q_sample_pairs(x_0_real, _ts_feat)
+        _ts_feat = torch.randint(0, self.n_T, (self.batch_size,), dtype=torch.int64).to(self.device)
+        x_t_real, x_tp1_real, _ = self.q_sample_pairs(x_0_real, _ts_feat)
         x_0_fake = self.netG(z, att_0_real, con_0_real, x_tp1_real.detach(), _ts_feat)
         x_t_fake = self.sample_posterior(x_0_fake, x_tp1_real, _ts_feat)
 
@@ -494,76 +509,9 @@ class ZERODIFF(torch.nn.Module):
         errG += self.gamma_recons * R_cost
 
         if self.relationship_enabled:
-            adjacent_prediction = None
-            if opt.rel_temporal_weight > 0:
-                adjacent_timestep = torch.where(
-                    episode_timestep < self.n_T - 1,
-                    episode_timestep + 1,
-                    episode_timestep - 1,
-                )
-                adjacent_ts_feat = adjacent_timestep.expand(self.batch_size)
-                _, adjacent_x_tp1, _ = self.q_sample_pairs(
-                    x_0_real,
-                    adjacent_ts_feat,
-                    q_noise=q_noise,
-                    step_noise=step_noise,
-                )
-                adjacent_prediction = self.netG(
-                    z, att_0_real, con_0_real, adjacent_x_tp1.detach(), adjacent_ts_feat
-                )
+            errG += self.gamma_rel * self.compute_relation_loss()
 
-            relation_loss_parts = multigranularity_relation_losses(
-                x_0_fake,
-                con_0_real,
-                att_0_real,
-                label,
-                adjacent_prediction=adjacent_prediction,
-            )
-            class_t_weight, instance_t_weight = relation_weights(
-                episode_timestep,
-                self.n_T,
-                mode=opt.rel_time_mode,
-                class_t0=opt.rel_class_t0,
-                class_tT=opt.rel_class_tT,
-                instance_t0=opt.rel_instance_t0,
-                instance_tT=opt.rel_instance_tT,
-            )
-            temporal_t_weight = 0.5 * (class_t_weight + instance_t_weight)
-            relation_objectives = {
-                'class': opt.rel_class_weight * class_t_weight * relation_loss_parts['class'],
-                'instance': opt.rel_instance_weight * instance_t_weight * relation_loss_parts['instance'],
-                'temporal': opt.rel_temporal_weight * temporal_t_weight * relation_loss_parts['temporal'],
-            }
-
-            errG.backward(retain_graph=True)
-            generator_parameters = tuple(self.netG.parameters())
-            base_gradients = clone_parameter_gradients(generator_parameters)
-            gradient_stats = {}
-            objective_items = tuple(relation_objectives.items())
-            for objective_index, (objective_name, objective_loss) in enumerate(objective_items):
-                gradient_stats[objective_name] = accumulate_relation_gradient(
-                    objective_loss,
-                    generator_parameters,
-                    scale=self.gamma_rel,
-                    mode=opt.rel_gradient_mode,
-                    eps=opt.rel_conflict_eps,
-                    base_gradients=base_gradients,
-                    retain_graph=objective_index < len(objective_items) - 1,
-                )
-            self.interval_recorder_sum['rel_class_loss'] += relation_loss_parts['class'].detach()
-            self.interval_recorder_sum['rel_instance_loss'] += relation_loss_parts['instance'].detach()
-            self.interval_recorder_sum['rel_temporal_loss'] += relation_loss_parts['temporal'].detach()
-            self.interval_recorder_sum['rel_class_t_weight'] += class_t_weight.detach()
-            self.interval_recorder_sum['rel_instance_t_weight'] += instance_t_weight.detach()
-            for relation_name in ('class', 'instance', 'temporal'):
-                self.interval_recorder_sum[f'rel_{relation_name}_grad_cosine'] += (
-                    gradient_stats[relation_name]['cosine']
-                )
-                self.interval_recorder_sum[f'rel_{relation_name}_grad_conflict'] += (
-                    gradient_stats[relation_name]['conflict']
-                )
-        else:
-            errG.backward()
+        errG.backward()
         # write a condition here
         self.optimizerE.step()
         self.optimizerG.step()
@@ -597,7 +545,7 @@ class ZERODIFF(torch.nn.Module):
 
         return x_0_fake, r_0_fake
 
-    def q_sample_pairs(self, x_0, t, q_noise=None, step_noise=None):
+    def q_sample_pairs(self, x_0, t):
         """
         Generate a pair of disturbed images for training, use prior_coefficients
         :param x_0: x_0
@@ -605,26 +553,24 @@ class ZERODIFF(torch.nn.Module):
         :return: x_t, x_{t+1}
         """
         t = t.long()
-        if step_noise is None:
-            step_noise = torch.randn_like(x_0)
-        x_t, ratio_x0 = self.q_sample(x_0, t, noise=q_noise)
+        noise = torch.randn_like(x_0)
+        x_t, ratio_x0 = self.q_sample(x_0, t)
 
         ratio_xt2xtp1 = zerodiff_tools.extract(self.prior_coefficients.sqrt_alphas, t + 1, x_0.shape)
         ratio_noise = zerodiff_tools.extract(self.prior_coefficients.sigmas, t + 1, x_0.shape)
 
-        x_t_plus_one = ratio_xt2xtp1 * x_t + ratio_noise * step_noise
+        x_t_plus_one = ratio_xt2xtp1 * x_t + ratio_noise * noise
 
         return x_t, x_t_plus_one, ratio_x0
 
-    def q_sample(self, x_0, t, noise=None):
+    def q_sample(self, x_0, t):
         """
         use prior_coefficients
         q(x_{t}|x_0,t)
         Diffuse the data (t == 0 means diffused for t step)
         """
         t = t.long()
-        if noise is None:
-            noise = torch.randn_like(x_0)
+        noise = torch.randn_like(x_0)
 
         ratio_x0 = zerodiff_tools.extract(self.prior_coefficients.sqrt_alphas_bar, t, x_0.shape)
         ratio_noise = zerodiff_tools.extract(self.prior_coefficients.sigmas_bar, t, x_0.shape)
@@ -719,19 +665,14 @@ for epoch in range(0, opt.nepoch):
     criticD_train_fake_xc = zerodiff.interval_recorder_sum['criticD_train_fake_xc'].item() / n_iter
     if zerodiff.relationship_enabled:
         relation_epoch_stats = {
-            key: zerodiff.interval_recorder_sum[key].item() / n_iter
+            key: zerodiff.interval_recorder_sum[key] / n_iter
             for key in (
                 'rel_class_loss',
                 'rel_instance_loss',
-                'rel_temporal_loss',
+                'rel_total_loss',
                 'rel_class_t_weight',
                 'rel_instance_t_weight',
-                'rel_class_grad_cosine',
-                'rel_instance_grad_cosine',
-                'rel_temporal_grad_cosine',
-                'rel_class_grad_conflict',
-                'rel_instance_grad_conflict',
-                'rel_temporal_grad_conflict',
+                'rel_timestep',
             )
         }
     zerodiff.init_recorder()
@@ -742,23 +683,17 @@ for epoch in range(0, opt.nepoch):
 
     if zerodiff.relationship_enabled:
         log_record = (
-            '[%d/%d] Relation class: %.6f, instance: %.6f, temporal: %.6f, '
-            'w_class(t): %.4f, w_instance(t): %.4f, '
-            'grad_cos(C/I/T): %.4f/%.4f/%.4f, conflict(C/I/T): %.4f/%.4f/%.4f'
+            '[%d/%d] TimeAwareVSRA class: %.6f, instance: %.6f, total: %.6f, '
+            't: %.4f, w_class(t): %.4f, w_instance(t): %.4f'
             % (
                 epoch,
                 opt.nepoch,
                 relation_epoch_stats['rel_class_loss'],
                 relation_epoch_stats['rel_instance_loss'],
-                relation_epoch_stats['rel_temporal_loss'],
+                relation_epoch_stats['rel_total_loss'],
+                relation_epoch_stats['rel_timestep'],
                 relation_epoch_stats['rel_class_t_weight'],
                 relation_epoch_stats['rel_instance_t_weight'],
-                relation_epoch_stats['rel_class_grad_cosine'],
-                relation_epoch_stats['rel_instance_grad_cosine'],
-                relation_epoch_stats['rel_temporal_grad_cosine'],
-                relation_epoch_stats['rel_class_grad_conflict'],
-                relation_epoch_stats['rel_instance_grad_conflict'],
-                relation_epoch_stats['rel_temporal_grad_conflict'],
             )
         )
         print(log_record)
