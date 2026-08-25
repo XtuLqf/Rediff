@@ -7,7 +7,8 @@
   exporters, gradient probes, and offline plotting. Use it to train/select a
   clean baseline checkpoint and produce the motivation figures.
 - `codex/time-aware-relational-consistency` is the proposed-method branch. It
-  contains the same diagnostics plus time-aware class- and instance-level VSRA.
+  contains the same diagnostics plus calibrated, orthogonally decomposed,
+  time-aware class- and instance-level VSRA.
   Use it only after the baseline evidence is fixed.
 
 These branches are currently local until they are pushed. From the development
@@ -155,6 +156,9 @@ python scripts/run_awa2_zerodiff_DFG_train.py \
   --rel_n_way 8 --rel_k_shot 8 \
   --rel_class_weight 1.0 \
   --rel_instance_weight 1.0 \
+  --rel_proj_dim 512 \
+  --rel_teacher_anchor_weight 1.0 \
+  --rel_dist_ratio 1.0 --rel_angle_ratio 2.0 --rel_use_angle \
   --rel_time_mode fixed \
   --rel_time_strength 0.5
 ```

@@ -55,6 +55,14 @@ parser.add_argument("--gamma_rel", type=float, default=0.0,
                     help="overall time-aware VSRA weight; 0 preserves the baseline")
 parser.add_argument("--rel_class_weight", type=float, default=1.0)
 parser.add_argument("--rel_instance_weight", type=float, default=1.0)
+parser.add_argument("--rel_proj_dim", type=int, default=512,
+                    help="dimension of the calibrated VSRA relation space")
+parser.add_argument("--rel_teacher_anchor_weight", type=float, default=1.0,
+                    help="weight for preserving semantic and PaCo teacher topology")
+parser.add_argument("--rel_dist_ratio", type=float, default=1.0)
+parser.add_argument("--rel_angle_ratio", type=float, default=2.0)
+parser.add_argument("--rel_angle_max_samples", type=int, default=128)
+parser.add_argument("--rel_use_angle", action="store_true", default=False)
 parser.add_argument("--rel_n_way", type=int, default=8,
                     help="classes per balanced relation episode")
 parser.add_argument("--rel_k_shot", type=int, default=8,
@@ -89,9 +97,16 @@ opt.latent_size = opt.attSize
 if min(
     opt.rel_class_weight,
     opt.rel_instance_weight,
+    opt.rel_teacher_anchor_weight,
     opt.gamma_rel,
 ) < 0:
     parser.error("relation loss weights must be non-negative")
+if opt.gamma_rel > 0 and opt.rel_proj_dim <= 0:
+    parser.error("gamma_rel > 0 requires rel_proj_dim > 0")
+if opt.rel_dist_ratio < 0 or opt.rel_angle_ratio < 0:
+    parser.error("relation distance and angle ratios must be non-negative")
+if opt.rel_angle_max_samples < 0:
+    parser.error("rel_angle_max_samples must be non-negative")
 if not 0.0 <= opt.rel_time_strength <= 1.0:
     parser.error("rel_time_strength must be in [0, 1]")
 

@@ -2,7 +2,11 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from relation.topology import class_relation_loss, instance_relation_loss  # noqa: E402
+from relation.topology import (  # noqa: E402
+    class_means_and_residuals,
+    class_relation_loss,
+    instance_relation_loss,
+)
 
 
 def synthetic_episode():
@@ -48,3 +52,21 @@ def test_relation_teachers_are_detached():
     assert visual.grad is not None
     assert attributes.grad is None
     assert contrastive.grad is None
+
+
+def test_between_and_within_class_components_are_orthogonal():
+    features = torch.tensor(
+        [[1.0, 2.0], [3.0, 0.0], [-2.0, 1.0], [2.0, 5.0], [4.0, 3.0], [0.0, -1.0]]
+    )
+    labels = torch.tensor([0, 0, 1, 1, 2, 2])
+
+    means, residuals = class_means_and_residuals(features, labels)
+    _, inverse = torch.unique(labels, sorted=True, return_inverse=True)
+    between = means[inverse]
+
+    assert torch.allclose(between + residuals, features)
+    assert torch.allclose(
+        torch.stack([residuals[labels == class_id].sum(0) for class_id in torch.unique(labels)]),
+        torch.zeros_like(means),
+    )
+    assert torch.sum(between * residuals).item() == pytest.approx(0.0, abs=1e-6)
