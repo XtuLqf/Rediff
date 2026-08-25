@@ -37,6 +37,7 @@ else:
 
 env = os.environ.copy()
 env['OMP_NUM_THREADS'] = '4'
+env.setdefault('PYTHONFAULTHANDLER', '1')
 
 command = [
 	sys.executable,

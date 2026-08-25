@@ -10,13 +10,21 @@ import torch.nn.functional as F
 
 def normalized_relation_matrix(
     features: torch.Tensor,
-    eps: float = 1e-8,
+    eps: float = 1e-12,
 ) -> torch.Tensor:
-    """Return Euclidean relations normalized by the mean off-diagonal distance."""
-    relation = torch.cdist(features, features, p=2)
+    """Return normalized Euclidean relations using the original VSRA kernel."""
+    feature_square = features.pow(2).sum(dim=1)
+    product = features @ features.t()
+    squared_distance = (
+        feature_square.unsqueeze(1)
+        + feature_square.unsqueeze(0)
+        - 2.0 * product
+    ).clamp_min(eps)
+    relation = squared_distance.sqrt()
     if relation.shape[0] < 2:
-        return relation
+        return relation * 0.0
     mask = ~torch.eye(relation.shape[0], dtype=torch.bool, device=relation.device)
+    relation = relation * mask.to(relation.dtype)
     scale = relation[mask].mean().clamp_min(eps)
     return relation / scale
 
