@@ -68,10 +68,9 @@ parser.add_argument("--rel_use_angle", action="store_true", default=False)
 parser.add_argument("--rel_time_pair_weight", type=float, default=0.1,
                     help="weight of diffusion-timestep coordinated pair topology")
 parser.add_argument("--rel_time_mode", default="class_up_instance_down",
-                    choices=["fixed", "class_up_instance_down",
-                             "class_down_instance_up", "instance_up", "instance_down"])
+                    choices=["fixed", "class_up_instance_down"])
 parser.add_argument("--rel_time_strength", type=float, default=0.5,
-                    help="symmetric instance-weight variation around 1")
+                    help="symmetric class/instance weight variation around 1")
 ###
 parser.add_argument("--embed_type",  default='V', help='V/VA')
 parser.add_argument("--n_T", type=int, default=4)
@@ -81,14 +80,7 @@ parser.add_argument("--embConSize", type=int, default=512)
 parser.add_argument("--eval_interval", type=int, default=1)
 parser.add_argument('--ddpmbeta1', type=float, default=1e-1)
 parser.add_argument('--ddpmbeta2', type=float, default=20)
-# pretrain
-parser.add_argument('--init_con', action='store_true', default=False, help='enbale MinMaxScaler on contrastive representations')
-parser.add_argument("--netE_con_model_path", default=None)
 parser.add_argument("--netR_model_path", default=None)
-# eval
-parser.add_argument("--netG_model_path", default=None)
-#visualize
-parser.add_argument("--model_path", default=None)
 
 opt = parser.parse_args()
 opt.lambda2 = opt.lambda1

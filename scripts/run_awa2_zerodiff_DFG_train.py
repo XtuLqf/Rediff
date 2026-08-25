@@ -18,26 +18,18 @@ NETR_MODEL_CANDIDATES = [
 	OUT_DIR / 'diffzero_pretrain_100percent_att:att_b:64_lr:0.0005_n_T:4_betas:0.1,20_gamma:ADV:10.0_VAE:1.0_x0:1.0_xt:1.0_dist:0.0_num:1800_zsl.tar',
 ]
 
-for candidate in NETR_MODEL_CANDIDATES:
-	if candidate.exists():
-		NETR_MODEL = candidate
-		break
-else:
-	available = (
-		sorted(OUT_DIR.glob('*DRG*.tar'))
-		+ sorted(OUT_DIR.glob('diffzero_pretrain*.tar'))
-		if OUT_DIR.exists() else []
+NETR_MODEL = next(
+	(candidate for candidate in NETR_MODEL_CANDIDATES if candidate.exists()),
+	None,
+)
+if NETR_MODEL is None:
+	raise FileNotFoundError(
+		f'No matching AWA2 100% DRG checkpoint found in {OUT_DIR}. '
+		'Please run the AWA2 DRG script first.'
 	)
-	if available:
-		NETR_MODEL = available[0]
-	else:
-		raise FileNotFoundError(
-			f'No DRG checkpoint found in {OUT_DIR}. Please run the AWA2 DRG script first.'
-		)
 
 env = os.environ.copy()
 env['OMP_NUM_THREADS'] = '4'
-env.setdefault('PYTHONFAULTHANDLER', '1')
 
 command = [
 	sys.executable,
@@ -58,15 +50,3 @@ command = [
 command.extend(sys.argv[1:])
 
 subprocess.run(command, cwd=ROOT, check=True, env=env)
-
-# split_percent 100:
-# --split_percent 100 --syn_num 5400  --gamma_dist 0.0 --factor_dist 1.5 \
-# --netR_model_path ./out/AWA2/diffzero_pretrain_100percent_att:att_b:64_lr:0.0005_n_T:4_betas:0.1,20_gamma:ADV:10.0_VAE:1.0_x0:1.0_xt:1.0_dist:0.0_num:1800_gzsl.tar \
-
-# split_percent 30:
-# --split_percent 30 --syn_num 1800  --gamma_dist 0.0 --factor_dist 1.5 \
-# --netR_model_path ./out/AWA2/diffzero_pretrain_30percent_att:att_b:64_lr:0.0005_n_T:4_betas:0.1,20_gamma:ADV:10.0_VAE:1.0_x0:1.0_xt:1.0_dist:0.0_num:600_gzsl.tar \
-
-# split_percent 10:
-# --split_percent 10 --syn_num 600  --gamma_dist 0.0 --factor_dist 1.5  \
-# --netR_model_path ./out/AWA2/diffzero_pretrain_10percent_att:att_b:64_lr:0.0005_n_T:4_betas:0.1,20_gamma:ADV:10.0_VAE:1.0_x0:1.0_xt:1.0_dist:0.0_num:200_gzsl.tar \

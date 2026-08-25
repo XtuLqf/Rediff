@@ -9,10 +9,10 @@ from typing import Tuple
 def sample_relation_weights(
     timestep: torch.Tensor,
     n_timesteps: int,
-    mode: str = "fixed",
+    mode: str = "class_up_instance_down",
     strength: float = 0.5,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Return one class/instance reliability weight per generated sample."""
+    """Coordinate class and instance reliability along diffusion time."""
     if n_timesteps < 1:
         raise ValueError("n_timesteps must be positive.")
     if not 0.0 <= strength <= 1.0:
@@ -29,29 +29,6 @@ def sample_relation_weights(
     elif mode == "class_up_instance_down":
         class_weight = 1.0 + strength * direction
         instance_weight = 1.0 - strength * direction
-    elif mode == "class_down_instance_up":
-        class_weight = 1.0 - strength * direction
-        instance_weight = 1.0 + strength * direction
-    elif mode == "instance_up":
-        instance_weight = 1.0 + strength * direction
-    elif mode == "instance_down":
-        instance_weight = 1.0 - strength * direction
     else:
         raise ValueError(f"Unknown relation timestep mode: {mode}")
     return class_weight, instance_weight
-
-
-def relation_weights(
-    timestep: torch.Tensor,
-    n_timesteps: int,
-    mode: str = "fixed",
-    strength: float = 0.5,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Return mean class/instance weights for logging and compatibility."""
-    class_weight, instance_weight = sample_relation_weights(
-        timestep,
-        n_timesteps,
-        mode=mode,
-        strength=strength,
-    )
-    return class_weight.mean(), instance_weight.mean()

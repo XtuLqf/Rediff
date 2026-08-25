@@ -262,15 +262,11 @@ class ZERODIFF(torch.nn.Module):
         self.data = data
 
         self.netR = zerodiff_tools.DRG_Generator(opt).to(self.device)
-        try:
-            netR_state_dict = torch.load(
-                netR_model_path,
-                map_location=self.device,
-                weights_only=True,
-            )
-        except TypeError:
-            # Compatibility fallback for the original PyTorch 1.12 environment.
-            netR_state_dict = torch.load(netR_model_path, map_location=self.device)
+        netR_state_dict = torch.load(
+            netR_model_path,
+            map_location=self.device,
+            weights_only=True,
+        )
         netR_weights = netR_state_dict.get('state_dict_G_con') or netR_state_dict.get('state_dict_R')
         if netR_weights is None:
             raise KeyError("netR checkpoint must contain 'state_dict_G_con' or 'state_dict_R'.")

@@ -39,6 +39,18 @@ def normalized_relation_matrix(
     return relation / scale.clamp_min(eps)
 
 
+def _normalize_relation_on_mask(
+    relation: torch.Tensor,
+    mask: torch.Tensor,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    """Normalize a relation matrix only within the selected topology."""
+    selected = relation.masked_select(mask)
+    positive = selected[selected > 0]
+    scale = positive.mean() if positive.numel() > 0 else relation.new_tensor(1.0)
+    return relation / scale.clamp_min(eps)
+
+
 def rkd_distance_loss(
     student_features: torch.Tensor,
     teacher_features: torch.Tensor,
@@ -127,10 +139,6 @@ def time_aware_pair_losses(
     instance_sample_weights: torch.Tensor,
 ) -> Dict[str, torch.Tensor]:
     """Split pair space into disjoint cross-class and within-class relations."""
-    student_relation = normalized_relation_matrix(student_features)
-    with torch.no_grad():
-        semantic_relation = normalized_relation_matrix(semantic_features.detach())
-        contrastive_relation = normalized_relation_matrix(contrastive_features.detach())
     same_class = labels[:, None].eq(labels[None, :])
     off_diagonal = ~torch.eye(
         labels.shape[0],
@@ -139,16 +147,38 @@ def time_aware_pair_losses(
     )
     class_mask = ~same_class
     instance_mask = same_class & off_diagonal
+
+    student_distances = pairwise_distances(student_features)
+    with torch.no_grad():
+        semantic_distances = pairwise_distances(semantic_features.detach())
+        contrastive_distances = pairwise_distances(contrastive_features.detach())
+
+    class_student_relation = _normalize_relation_on_mask(
+        student_distances,
+        class_mask,
+    )
+    class_semantic_relation = _normalize_relation_on_mask(
+        semantic_distances,
+        class_mask,
+    )
+    instance_student_relation = _normalize_relation_on_mask(
+        student_distances,
+        instance_mask,
+    )
+    instance_contrastive_relation = _normalize_relation_on_mask(
+        contrastive_distances,
+        instance_mask,
+    )
     return {
         "class": _weighted_pair_loss(
-            student_relation,
-            semantic_relation,
+            class_student_relation,
+            class_semantic_relation,
             class_mask,
             class_sample_weights,
         ),
         "instance": _weighted_pair_loss(
-            student_relation,
-            contrastive_relation,
+            instance_student_relation,
+            instance_contrastive_relation,
             instance_mask,
             instance_sample_weights,
         ),

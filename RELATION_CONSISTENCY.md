@@ -50,7 +50,16 @@ M_instance(i,j) = 1[y_i == y_j and i != j].
 ```
 
 The masks are disjoint. Cross-class pairs align with semantic distances and
-within-class pairs align with PaCo distances. The final relation objective is
+within-class pairs align with PaCo distances. Each topology is normalized only
+over the pairs selected by its own mask:
+
+```text
+D_hat_M = D / mean(D_ij for (i,j) in M and D_ij > 0).
+```
+
+Class-level scale is therefore independent of within-class dispersion, and
+instance-level scale is independent of cross-class separation. The final
+relation objective is
 
 ```text
 L_relation = L_legacy

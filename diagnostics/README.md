@@ -26,7 +26,7 @@ The code is compatible with Python 3.10, PyTorch 2.9.1+cu130, torchvision
 requires Matplotlib, which is not included in the base experiment dependencies:
 
 ```bash
-pip install matplotlib==3.7.5 pytest==7.4.4
+pip install matplotlib==3.7.5
 ```
 
 Both plotting commands accept one or more metrics CSV files after `--metrics`.

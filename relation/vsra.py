@@ -54,7 +54,7 @@ class TimeAwareVSRA(nn.Module):
         angle_ratio: float = 0.0,
         angle_max_samples: int = 128,
         time_pair_weight: float = 0.0,
-        time_mode: str = "fixed",
+        time_mode: str = "class_up_instance_down",
         time_strength: float = 0.5,
     ) -> None:
         super().__init__()

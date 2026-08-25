@@ -33,7 +33,7 @@ conda create -n zerodiff python=3.10 -y
 conda activate zerodiff
 python -m pip install --upgrade pip
 pip install torch==2.9.1+cu130 torchvision==0.24.1+cu130 torchaudio==2.9.1+cu130 --index-url https://download.pytorch.org/whl/cu130
-pip install scikit-learn==1.3.0 scipy==1.10.0 numpy==1.24.3 pillow==9.4.0 matplotlib==3.7.5 pytest==7.4.4
+pip install scikit-learn==1.3.0 scipy==1.10.0 numpy==1.24.3 pillow==9.4.0 matplotlib==3.7.5
 ```
 
 Verify that the intended environment is active:
