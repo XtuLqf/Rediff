@@ -42,8 +42,7 @@ relation_run_config = {
     'teacher_anchor_weight': opt.rel_teacher_anchor_weight,
     'distance_ratio': opt.rel_dist_ratio,
     'angle_ratio': opt.rel_angle_ratio if opt.rel_use_angle else 0.0,
-    'n_way': opt.rel_n_way,
-    'k_shot': opt.rel_k_shot,
+    'time_pair_weight': opt.rel_time_pair_weight,
     'time_mode': opt.rel_time_mode,
     'time_strength': opt.rel_time_strength,
 }
@@ -55,7 +54,7 @@ if opt.gamma_rel > 0:
         f"-c{opt.rel_class_weight:g}"
         f"-i{opt.rel_instance_weight:g}"
         f"-p{opt.rel_proj_dim}"
-        f"-e{opt.rel_n_way}x{opt.rel_k_shot}"
+        f"-tp{opt.rel_time_pair_weight:g}"
     )
 else:
     relation_run_suffix = ""
@@ -126,37 +125,6 @@ def sample(batch_size):
     input_label.copy_(batch_label)
     return input_res, input_con, input_att, input_label
 
-
-def sample_relation_episode(n_way, k_shot):
-    """Sample a balanced seen-class episode exclusively for relation supervision."""
-    if n_way > data.seenclasses.numel():
-        raise ValueError("rel_n_way exceeds the number of seen classes")
-
-    class_order = torch.randperm(data.seenclasses.numel())[:n_way]
-    selected_classes = data.seenclasses[class_order]
-    episode_indices = []
-    for class_id in selected_classes:
-        candidates = torch.nonzero(data.train_label == class_id, as_tuple=False).flatten()
-        if candidates.numel() == 0:
-            raise RuntimeError("A selected seen class has no training instances")
-        if candidates.numel() >= k_shot:
-            chosen = candidates[torch.randperm(candidates.numel())[:k_shot]]
-        else:
-            chosen = candidates[torch.randint(candidates.numel(), (k_shot,))]
-        episode_indices.append(chosen)
-
-    episode_indices = torch.cat(episode_indices, dim=0)
-    batch_feature = data.train_feature[episode_indices]
-    batch_con = data.train_paco[episode_indices]
-    batch_label = data.train_label[episode_indices]
-    batch_att = data.attribute[batch_label]
-    device = input_res.device
-    return (
-        batch_feature.to(device),
-        batch_con.to(device),
-        batch_att.to(device),
-        batch_label.to(device),
-    )
 
 def sample_con(batch_size):
     idx = torch.randperm(data.ntrain)[0:batch_size]
@@ -264,10 +232,6 @@ class ZERODIFF(torch.nn.Module):
         self.factor_dist = opt.factor_dist
         self.gamma_rel = opt.gamma_rel
         self.relationship_enabled = self.gamma_rel > 0
-        if self.relationship_enabled and opt.rel_n_way > self.seenclasses.numel():
-            raise ValueError("rel_n_way exceeds the number of seen classes")
-        if self.relationship_enabled and (opt.rel_n_way < 2 or opt.rel_k_shot < 2):
-            raise ValueError("relation training requires at least 2 ways and 2 shots")
         self.time_aware_vsra = None
         self.optimizerVSRA = None
         if self.relationship_enabled:
@@ -282,6 +246,7 @@ class ZERODIFF(torch.nn.Module):
                 distance_ratio=opt.rel_dist_ratio,
                 angle_ratio=opt.rel_angle_ratio if opt.rel_use_angle else 0.0,
                 angle_max_samples=opt.rel_angle_max_samples,
+                time_pair_weight=opt.rel_time_pair_weight,
                 time_mode=opt.rel_time_mode,
                 time_strength=opt.rel_time_strength,
             ).to(self.device)
@@ -325,12 +290,14 @@ class ZERODIFF(torch.nn.Module):
         self.interval_recorder_sum['criticD_test_real_x0'] = 0.0
         self.interval_recorder_sum['criticD_test_real_xt'] = 0.0
         self.interval_recorder_sum['criticD_test_real_xc'] = 0.0
-        self.interval_recorder_sum['rel_class_loss'] = 0.0
-        self.interval_recorder_sum['rel_instance_loss'] = 0.0
-        self.interval_recorder_sum['rel_real_class_loss'] = 0.0
-        self.interval_recorder_sum['rel_real_instance_loss'] = 0.0
-        self.interval_recorder_sum['rel_teacher_class_loss'] = 0.0
-        self.interval_recorder_sum['rel_teacher_instance_loss'] = 0.0
+        self.interval_recorder_sum['rel_semantic_loss'] = 0.0
+        self.interval_recorder_sum['rel_contrastive_loss'] = 0.0
+        self.interval_recorder_sum['rel_pair_class_loss'] = 0.0
+        self.interval_recorder_sum['rel_pair_instance_loss'] = 0.0
+        self.interval_recorder_sum['rel_legacy_loss'] = 0.0
+        self.interval_recorder_sum['rel_real_semantic_loss'] = 0.0
+        self.interval_recorder_sum['rel_real_contrastive_loss'] = 0.0
+        self.interval_recorder_sum['rel_teacher_anchor_loss'] = 0.0
         self.interval_recorder_sum['rel_total_loss'] = 0.0
         self.interval_recorder_sum['rel_class_t_weight'] = 0.0
         self.interval_recorder_sum['rel_instance_t_weight'] = 0.0
@@ -347,11 +314,6 @@ class ZERODIFF(torch.nn.Module):
             self.lambda1 *= 1.1
         elif gp_sum < 1.001:
             self.lambda1 /= 1.1
-        if self.relationship_enabled:
-            x_0_real, con_0_real, att_0_real, label = sample_relation_episode(
-                opt.rel_n_way,
-                opt.rel_k_shot,
-            )
         G_cost, vae_loss_seen = self.update_G(
             x_0_real,
             con_0_real,
@@ -360,7 +322,7 @@ class ZERODIFF(torch.nn.Module):
         )
         return D_cost, Wasserstein_D, distill_loss, G_cost, vae_loss_seen
 
-    def update_relation_space(self, x_0_real, con_0_real, att_0_real, label):
+    def update_relation_space(self, x_0_real, con_0_real, att_0_real):
         """Calibrate the VSRA projectors on real data before constraining G."""
         for parameter in self.time_aware_vsra.parameters():
             parameter.requires_grad = True
@@ -369,16 +331,14 @@ class ZERODIFF(torch.nn.Module):
             x_0_real,
             att_0_real,
             con_0_real,
-            label,
         )
         (self.gamma_rel * losses['total']).backward()
         self.optimizerVSRA.step()
         for parameter in self.time_aware_vsra.parameters():
             parameter.requires_grad = False
-        self.interval_recorder_sum['rel_real_class_loss'] += losses['class'].detach().item()
-        self.interval_recorder_sum['rel_real_instance_loss'] += losses['instance'].detach().item()
-        self.interval_recorder_sum['rel_teacher_class_loss'] += losses['teacher_class'].detach().item()
-        self.interval_recorder_sum['rel_teacher_instance_loss'] += losses['teacher_instance'].detach().item()
+        self.interval_recorder_sum['rel_real_semantic_loss'] += losses['semantic'].detach().item()
+        self.interval_recorder_sum['rel_real_contrastive_loss'] += losses['contrastive'].detach().item()
+        self.interval_recorder_sum['rel_teacher_anchor_loss'] += losses['teacher_anchor'].detach().item()
 
     def update_D(self, x_0_real, con_0_real, att_0_real, gp_sum, label):
         for p in self.netE.parameters():
@@ -488,7 +448,6 @@ class ZERODIFF(torch.nn.Module):
                 x_0_real,
                 con_0_real,
                 att_0_real,
-                label,
             )
         for p in self.netE.parameters():
             p.requires_grad = True
@@ -509,23 +468,13 @@ class ZERODIFF(torch.nn.Module):
 
         z, means, log_var = self.netE(x_0_real, att_0_real)
 
-        if self.relationship_enabled:
-            episode_timestep = torch.randint(
-                0,
-                self.n_T,
-                (1,),
-                dtype=torch.int64,
-                device=self.device,
-            )
-            _ts_feat = episode_timestep.expand(x_0_real.shape[0])
-        else:
-            _ts_feat = torch.randint(
-                0,
-                self.n_T,
-                (x_0_real.shape[0],),
-                dtype=torch.int64,
-                device=self.device,
-            )
+        _ts_feat = torch.randint(
+            0,
+            self.n_T,
+            (x_0_real.shape[0],),
+            dtype=torch.int64,
+            device=self.device,
+        )
         x_t_real, x_tp1_real, _ = self.q_sample_pairs(x_0_real, _ts_feat)
         x_0_fake = self.netG(z, att_0_real, con_0_real, x_tp1_real.detach(), _ts_feat)
         x_t_fake = self.sample_posterior(x_0_fake, x_tp1_real, _ts_feat)
@@ -553,15 +502,18 @@ class ZERODIFF(torch.nn.Module):
                 att_0_real,
                 con_0_real,
                 label,
-                episode_timestep,
+                _ts_feat,
             )
             errG += self.gamma_rel * relation_losses['total']
-            self.interval_recorder_sum['rel_class_loss'] += relation_losses['class'].detach().item()
-            self.interval_recorder_sum['rel_instance_loss'] += relation_losses['instance'].detach().item()
+            self.interval_recorder_sum['rel_semantic_loss'] += relation_losses['semantic'].detach().item()
+            self.interval_recorder_sum['rel_contrastive_loss'] += relation_losses['contrastive'].detach().item()
+            self.interval_recorder_sum['rel_pair_class_loss'] += relation_losses['pair_class'].detach().item()
+            self.interval_recorder_sum['rel_pair_instance_loss'] += relation_losses['pair_instance'].detach().item()
+            self.interval_recorder_sum['rel_legacy_loss'] += relation_losses['legacy_total'].detach().item()
             self.interval_recorder_sum['rel_total_loss'] += relation_losses['total'].detach().item()
             self.interval_recorder_sum['rel_class_t_weight'] += relation_losses['class_weight'].detach().item()
             self.interval_recorder_sum['rel_instance_t_weight'] += relation_losses['instance_weight'].detach().item()
-            self.interval_recorder_sum['rel_timestep'] += episode_timestep.detach().item()
+            self.interval_recorder_sum['rel_timestep'] += _ts_feat.float().mean().detach().item()
 
         errG.backward()
         # write a condition here
@@ -719,12 +671,14 @@ for epoch in range(0, opt.nepoch):
         relation_epoch_stats = {
             key: zerodiff.interval_recorder_sum[key] / n_iter
             for key in (
-                'rel_class_loss',
-                'rel_instance_loss',
-                'rel_real_class_loss',
-                'rel_real_instance_loss',
-                'rel_teacher_class_loss',
-                'rel_teacher_instance_loss',
+                'rel_semantic_loss',
+                'rel_contrastive_loss',
+                'rel_pair_class_loss',
+                'rel_pair_instance_loss',
+                'rel_legacy_loss',
+                'rel_real_semantic_loss',
+                'rel_real_contrastive_loss',
+                'rel_teacher_anchor_loss',
                 'rel_total_loss',
                 'rel_class_t_weight',
                 'rel_instance_t_weight',
@@ -739,28 +693,31 @@ for epoch in range(0, opt.nepoch):
 
     if zerodiff.relationship_enabled:
         log_record = (
-            '[%d/%d] VSRA calibration visual(C/I): %.6f/%.6f, '
-            'teacher(C/I): %.6f/%.6f'
+            '[%d/%d] VSRA calibration semantic/con: %.6f/%.6f, '
+            'teacher anchor: %.6f'
             % (
                 epoch,
                 opt.nepoch,
-                relation_epoch_stats['rel_real_class_loss'],
-                relation_epoch_stats['rel_real_instance_loss'],
-                relation_epoch_stats['rel_teacher_class_loss'],
-                relation_epoch_stats['rel_teacher_instance_loss'],
+                relation_epoch_stats['rel_real_semantic_loss'],
+                relation_epoch_stats['rel_real_contrastive_loss'],
+                relation_epoch_stats['rel_teacher_anchor_loss'],
             )
         )
         print(log_record)
         logger.write(log_record + '\n')
 
         log_record = (
-            '[%d/%d] TimeAwareVSRA class: %.6f, instance: %.6f, total: %.6f, '
+            '[%d/%d] TerminalVSRA semantic/con: %.6f/%.6f, legacy: %.6f, '
+            'time_pair(C/I): %.6f/%.6f, total: %.6f, '
             't: %.4f, w_class(t): %.4f, w_instance(t): %.4f'
             % (
                 epoch,
                 opt.nepoch,
-                relation_epoch_stats['rel_class_loss'],
-                relation_epoch_stats['rel_instance_loss'],
+                relation_epoch_stats['rel_semantic_loss'],
+                relation_epoch_stats['rel_contrastive_loss'],
+                relation_epoch_stats['rel_legacy_loss'],
+                relation_epoch_stats['rel_pair_class_loss'],
+                relation_epoch_stats['rel_pair_instance_loss'],
                 relation_epoch_stats['rel_total_loss'],
                 relation_epoch_stats['rel_timestep'],
                 relation_epoch_stats['rel_class_t_weight'],

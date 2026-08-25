@@ -1,105 +1,85 @@
-# Time-aware VSRA for ZeroDiff
+# Terminal time-aware VSRA for ZeroDiff
 
-This branch implements the proposed relation method on top of the runnable
-ZeroDiff DFG. The clean `diagnostics/` package remains the source of baseline
-measurements and is not imported by training code.
+This branch keeps the original DFG data path and places VSRA at the generator
+output. It restores the stable relation space from `exp/vsra` and coordinates
+semantic and contrastive topology with each sample's diffusion timestep.
 
-## Motivation and scope
+## Stable terminal relation space
 
-The clean baseline shows a mild but consistent granularity-dependent temporal
-response: class-level semantic topology is stable or slightly improves over
-diffusion timesteps, while instance-level contrastive topology becomes less
-faithful at higher timesteps. Adjacent-timestep correlations remain close to
-one, so severe relational drift and temporal discontinuity are not the claims of
-this method.
-
-The method first restores the calibrated relation space used by VSRA and then
-aligns two mathematically separated components at the sampled timestep:
-
-1. **Class-level VSRA:** projected visual class-mean relations are aligned with
-   semantic-attribute relations.
-2. **Instance-level VSRA:** projected, class-centered visual residual relations
-   are aligned with projected PaCo residual relations.
-3. **Timestep coordination:** class supervision stays fixed while instance
-   supervision is fixed, strengthened, or weakened toward high timesteps.
-
-Let `Z` be the episode class-indicator matrix and define
+Two learned projectors map visual and PaCo features into a shared relation
+space. Before every generator update they are calibrated on the ordinary real
+training batch with the original full-batch distance and angle RKD objectives:
 
 ```text
-P = Z (Z^T Z)^-1 Z^T,    H = I - P.
+L_real = w_s RKD(E_v(x_real), S)
+       + w_c RKD(E_v(x_real), E_c(C))
+       + w_a RKD(E_c(C), S).
 ```
 
-For a projected episode feature matrix `Q`, `PQ` is the expanded class-mean
-component and `HQ` is the within-class residual component. Because `P` and `H`
-are complementary orthogonal projections,
+The projectors are then frozen. The main DFG branch samples one independent
+timestep per sample, predicts `x_0_fake`, and applies terminal VSRA to that same
+prediction:
 
 ```text
-Q = PQ + HQ,    <PQ, HQ>_F = 0.
+L_legacy = w_s RKD(E_v(x_0_fake), S)
+         + w_c RKD(E_v(x_0_fake), E_c(C)).
 ```
 
-Class relations are computed only from the unique means represented by `PQ`;
-instance relations are computed only within each class in `HQ`. The two losses
-therefore do not reuse the same sample-space component. Both use scale-normalized
-RKD distances and optionally RKD angles.
+There is no balanced relation episode, auxiliary fake branch, shared batch
+timestep, class loop, or class-centering projection.
 
-## Training integration
+## Diffusion-timestep coordination
 
-When `gamma_rel > 0`, the generator update uses one balanced `N`-way, `K`-shot
-episode and one shared timestep. Two learned projectors map visual and PaCo
-features into a common relation space. Before each generator update, the
-projectors are calibrated on real data with three constraints:
-
-1. visual class means follow semantic topology;
-2. visual residuals follow the projected PaCo residual topology;
-3. the PaCo projector preserves semantic class topology and raw PaCo residual
-   topology.
-
-The projectors are then frozen and the relation loss is applied to the same
-`x_0_fake` used by the VAE, adversarial, and semantic reconstruction objectives.
-This prevents an auxiliary fake branch from changing the meaning of the VSRA
-gradient. With `gamma_rel=0`, projectors and their optimizer are not created, so
-the baseline random-number stream remains unchanged.
-
-The three instance schedules are symmetric around weight one. With normalized
-time `u=t/(T-1)` and strength `rho`:
+Let `u=t/(T-1)` and `d=2u-1`. The recommended schedule is
 
 ```text
-fixed:         w_i(t) = 1
-instance_up:   w_i(t) = 1 + rho * (2u - 1)
-instance_down: w_i(t) = 1 - rho * (2u - 1)
+w_class(t)    = 1 + rho d
+w_instance(t) = 1 - rho d.
 ```
 
-Their average strength is equal under uniform timestep sampling. Class weight is
-fixed at one in all three modes.
+High-noise predictions therefore receive stronger semantic class-topology
+supervision and weaker instance-level PaCo supervision; low-noise predictions
+receive the reverse allocation. Each pair `(i,j)` is weighted by the geometric
+mean `sqrt(w(t_i) w(t_j))`.
 
-## Run and ablate
+Pair space is split without per-class loops:
 
-The dataset DFG launchers pass additional arguments to the training entry point.
-For example:
+```text
+M_class(i,j)    = 1[y_i != y_j]
+M_instance(i,j) = 1[y_i == y_j and i != j].
+```
+
+The masks are disjoint. Cross-class pairs align with semantic distances and
+within-class pairs align with PaCo distances. The final relation objective is
+
+```text
+L_relation = L_legacy
+           + eta (w_s L_time_class + w_c L_time_instance).
+```
+
+`eta=0` exactly selects the restored VSRA anchor. The proposed time-aware method
+uses `eta=0.1` by default, so the diffusion correction remains subordinate to
+the stable VSRA objective.
+
+## AWA2 runs
+
+Restored VSRA anchor:
 
 ```bash
 python scripts/run_awa2_zerodiff_DFG_train.py \
   --gamma_rel 1.0 \
-  --rel_n_way 8 --rel_k_shot 8 \
-  --rel_class_weight 1.0 \
-  --rel_instance_weight 1.0 \
-  --rel_proj_dim 512 \
-  --rel_teacher_anchor_weight 1.0 \
-  --rel_dist_ratio 1.0 --rel_angle_ratio 2.0 --rel_use_angle \
-  --rel_time_mode fixed \
+  --rel_time_pair_weight 0.0
+```
+
+Time-aware terminal VSRA:
+
+```bash
+python scripts/run_awa2_zerodiff_DFG_train.py \
+  --gamma_rel 1.0 \
+  --rel_time_pair_weight 0.1 \
+  --rel_time_mode class_up_instance_down \
   --rel_time_strength 0.5
 ```
 
-Use the same command with `instance_up` and `instance_down`. The recommended
-experiment order is:
-
-1. `gamma_rel=0` baseline equivalence.
-2. Class-only VSRA.
-3. Instance-only VSRA.
-4. Joint VSRA with `fixed` weights.
-5. Joint VSRA with `instance_up`.
-6. Joint VSRA with `instance_down`.
-
-Adjacent-timestep consistency and gradient reconciliation are intentionally not
-part of the core implementation. They should only be reconsidered after the
-direct topology-alignment experiments establish a need.
+Both runs use `gamma_dist=0`, projection dimension 512, distance ratio 1, and
+angle ratio 2 in the AWA2 launcher, matching the original VSRA configuration.

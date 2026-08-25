@@ -49,9 +49,10 @@ command = [
 	'--lr', '0.0005', '--classifier_lr', '0.001', '--gamma_recons', '1.0', '--freeze_dec', '--dec_lr', '0.0001',
 	'--gamma_ADV', '10', '--gamma_VAE', '1.0', '--embed_type', 'VA',
 	'--n_T', '4', '--dim_t', '85', '--gamma_x0', '1.0', '--gamma_xt', '1.0',
-	'--split_percent', '100', '--syn_num', '5400', '--gamma_dist', '5.0', '--factor_dist', '1.5',
+	'--split_percent', '100', '--syn_num', '5400', '--gamma_dist', '0.0', '--factor_dist', '1.5',
 	'--rel_proj_dim', '512', '--rel_teacher_anchor_weight', '1.0',
 	'--rel_dist_ratio', '1.0', '--rel_angle_ratio', '2.0', '--rel_angle_max_samples', '128', '--rel_use_angle',
+	'--rel_time_pair_weight', '0.1', '--rel_time_mode', 'class_up_instance_down', '--rel_time_strength', '0.5',
 	'--netR_model_path', str(NETR_MODEL),
 ]
 command.extend(sys.argv[1:])
@@ -59,13 +60,13 @@ command.extend(sys.argv[1:])
 subprocess.run(command, cwd=ROOT, check=True, env=env)
 
 # split_percent 100:
-# --split_percent 100 --syn_num 5400  --gamma_dist 5.0 --factor_dist 1.5 \
+# --split_percent 100 --syn_num 5400  --gamma_dist 0.0 --factor_dist 1.5 \
 # --netR_model_path ./out/AWA2/diffzero_pretrain_100percent_att:att_b:64_lr:0.0005_n_T:4_betas:0.1,20_gamma:ADV:10.0_VAE:1.0_x0:1.0_xt:1.0_dist:0.0_num:1800_gzsl.tar \
 
 # split_percent 30:
-# --split_percent 30 --syn_num 1800  --gamma_dist 5.0 --factor_dist 1.5 \
+# --split_percent 30 --syn_num 1800  --gamma_dist 0.0 --factor_dist 1.5 \
 # --netR_model_path ./out/AWA2/diffzero_pretrain_30percent_att:att_b:64_lr:0.0005_n_T:4_betas:0.1,20_gamma:ADV:10.0_VAE:1.0_x0:1.0_xt:1.0_dist:0.0_num:600_gzsl.tar \
 
 # split_percent 10:
-# --split_percent 10 --syn_num 600  --gamma_dist 5.0 --factor_dist 1.5  \
+# --split_percent 10 --syn_num 600  --gamma_dist 0.0 --factor_dist 1.5  \
 # --netR_model_path ./out/AWA2/diffzero_pretrain_10percent_att:att_b:64_lr:0.0005_n_T:4_betas:0.1,20_gamma:ADV:10.0_VAE:1.0_x0:1.0_xt:1.0_dist:0.0_num:200_gzsl.tar \

@@ -53,8 +53,10 @@ parser.add_argument("--factor_dist", type=float, default=1.0)
 ### time-aware VSRA (disabled by default)
 parser.add_argument("--gamma_rel", type=float, default=0.0,
                     help="overall time-aware VSRA weight; 0 preserves the baseline")
-parser.add_argument("--rel_class_weight", type=float, default=1.0)
-parser.add_argument("--rel_instance_weight", type=float, default=1.0)
+parser.add_argument("--rel_class_weight", type=float, default=1.0,
+                    help="semantic-teacher weight in terminal VSRA")
+parser.add_argument("--rel_instance_weight", type=float, default=1.0,
+                    help="contrastive-teacher weight in terminal VSRA")
 parser.add_argument("--rel_proj_dim", type=int, default=512,
                     help="dimension of the calibrated VSRA relation space")
 parser.add_argument("--rel_teacher_anchor_weight", type=float, default=1.0,
@@ -63,12 +65,11 @@ parser.add_argument("--rel_dist_ratio", type=float, default=1.0)
 parser.add_argument("--rel_angle_ratio", type=float, default=2.0)
 parser.add_argument("--rel_angle_max_samples", type=int, default=128)
 parser.add_argument("--rel_use_angle", action="store_true", default=False)
-parser.add_argument("--rel_n_way", type=int, default=8,
-                    help="classes per balanced relation episode")
-parser.add_argument("--rel_k_shot", type=int, default=8,
-                    help="instances per class in a balanced relation episode")
-parser.add_argument("--rel_time_mode", default="fixed",
-                    choices=["fixed", "instance_up", "instance_down"])
+parser.add_argument("--rel_time_pair_weight", type=float, default=0.1,
+                    help="weight of diffusion-timestep coordinated pair topology")
+parser.add_argument("--rel_time_mode", default="class_up_instance_down",
+                    choices=["fixed", "class_up_instance_down",
+                             "class_down_instance_up", "instance_up", "instance_down"])
 parser.add_argument("--rel_time_strength", type=float, default=0.5,
                     help="symmetric instance-weight variation around 1")
 ###
@@ -98,6 +99,7 @@ if min(
     opt.rel_class_weight,
     opt.rel_instance_weight,
     opt.rel_teacher_anchor_weight,
+    opt.rel_time_pair_weight,
     opt.gamma_rel,
 ) < 0:
     parser.error("relation loss weights must be non-negative")

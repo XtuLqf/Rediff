@@ -1,4 +1,4 @@
-"""Time-aware VSRA in a calibrated, orthogonally decomposed relation space."""
+"""Terminal VSRA with an optional vectorized time-aware pair correction."""
 
 from __future__ import annotations
 
@@ -8,12 +8,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from .timestep_schedule import relation_weights
-from .topology import (
-    class_relation_loss,
-    decomposed_relation_losses,
-    instance_relation_loss,
-)
+from .timestep_schedule import sample_relation_weights
+from .topology import relation_alignment_components, time_aware_pair_losses
 
 
 class RelationProjector(nn.Module):
@@ -43,7 +39,7 @@ class RelationProjector(nn.Module):
 
 
 class TimeAwareVSRA(nn.Module):
-    """Calibrate a VSRA space on real data and constrain generated features in it."""
+    """Restore original terminal VSRA and add a vectorized diffusion-time term."""
 
     def __init__(
         self,
@@ -57,17 +53,19 @@ class TimeAwareVSRA(nn.Module):
         distance_ratio: float = 1.0,
         angle_ratio: float = 0.0,
         angle_max_samples: int = 128,
+        time_pair_weight: float = 0.0,
         time_mode: str = "fixed",
         time_strength: float = 0.5,
     ) -> None:
         super().__init__()
         self.n_timesteps = n_timesteps
-        self.class_weight = class_weight
-        self.instance_weight = instance_weight
+        self.semantic_weight = class_weight
+        self.contrastive_weight = instance_weight
         self.teacher_anchor_weight = teacher_anchor_weight
         self.distance_ratio = distance_ratio
         self.angle_ratio = angle_ratio
         self.angle_max_samples = angle_max_samples
+        self.time_pair_weight = time_pair_weight
         self.time_mode = time_mode
         self.time_strength = time_strength
         self.visual_projector = RelationProjector(visual_dim, projection_dim)
@@ -76,18 +74,14 @@ class TimeAwareVSRA(nn.Module):
             projection_dim,
         )
 
-    def _relation_parts(
+    def _align(
         self,
         student_features: torch.Tensor,
-        semantic_attributes: torch.Tensor,
-        instance_teacher_features: torch.Tensor,
-        labels: torch.Tensor,
+        teacher_features: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
-        return decomposed_relation_losses(
+        return relation_alignment_components(
             student_features,
-            semantic_attributes,
-            instance_teacher_features,
-            labels,
+            teacher_features,
             distance_ratio=self.distance_ratio,
             angle_ratio=self.angle_ratio,
             angle_max_samples=self.angle_max_samples,
@@ -98,48 +92,35 @@ class TimeAwareVSRA(nn.Module):
         real_visual: torch.Tensor,
         semantic_attributes: torch.Tensor,
         real_contrastive: torch.Tensor,
-        labels: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
-        """Shape the relation space on real visual and PaCo features.
-
-        The C projector is anchored at class level by semantics and at instance
-        level by the original PaCo geometry. The visual projector then learns
-        both components of that calibrated teacher space.
-        """
+        """Reproduce original VSRA real-space calibration."""
         visual_embedding = self.visual_projector(real_visual.detach())
         contrastive_embedding = self.contrastive_projector(real_contrastive.detach())
-        visual_parts = self._relation_parts(
+        semantic = self._align(visual_embedding, semantic_attributes)
+        contrastive = self._align(
             visual_embedding,
-            semantic_attributes,
             contrastive_embedding.detach(),
-            labels,
         )
-        teacher_class = class_relation_loss(
-            contrastive_embedding,
-            semantic_attributes,
-            labels,
-            self.distance_ratio,
-            self.angle_ratio,
-            self.angle_max_samples,
-        )
-        teacher_instance = instance_relation_loss(
-            contrastive_embedding,
-            real_contrastive,
-            labels,
-            self.distance_ratio,
-            self.angle_ratio,
-            self.angle_max_samples,
-        )
+        teacher_anchor = self._align(contrastive_embedding, semantic_attributes)
         total = (
-            self.class_weight * visual_parts["class"]
-            + self.instance_weight * visual_parts["instance"]
-            + self.teacher_anchor_weight * (teacher_class + teacher_instance)
+            self.semantic_weight * semantic["total"]
+            + self.contrastive_weight * contrastive["total"]
+            + self.teacher_anchor_weight * teacher_anchor["total"]
         )
         return {
-            "class": visual_parts["class"],
-            "instance": visual_parts["instance"],
-            "teacher_class": teacher_class,
-            "teacher_instance": teacher_instance,
+            "semantic": semantic["total"],
+            "contrastive": contrastive["total"],
+            "teacher_anchor": teacher_anchor["total"],
+            "distance": (
+                self.semantic_weight * semantic["distance"]
+                + self.contrastive_weight * contrastive["distance"]
+                + self.teacher_anchor_weight * teacher_anchor["distance"]
+            ),
+            "angle": (
+                self.semantic_weight * semantic["angle"]
+                + self.contrastive_weight * contrastive["angle"]
+                + self.teacher_anchor_weight * teacher_anchor["angle"]
+            ),
             "total": total,
         }
 
@@ -156,26 +137,58 @@ class TimeAwareVSRA(nn.Module):
             contrastive_teacher = self.contrastive_projector(
                 real_contrastive.detach()
             )
-        parts = self._relation_parts(
-            generated_embedding,
-            semantic_attributes,
-            contrastive_teacher,
-            labels,
+
+        semantic = self._align(generated_embedding, semantic_attributes)
+        contrastive = self._align(generated_embedding, contrastive_teacher)
+        legacy_total = (
+            self.semantic_weight * semantic["total"]
+            + self.contrastive_weight * contrastive["total"]
         )
-        class_t_weight, instance_t_weight = relation_weights(
-            timestep,
-            self.n_timesteps,
-            mode=self.time_mode,
-            strength=self.time_strength,
+
+        zero = generated_embedding.sum() * 0.0
+        pair_class = zero
+        pair_instance = zero
+        class_weights = torch.ones_like(timestep, dtype=torch.float32)
+        instance_weights = torch.ones_like(timestep, dtype=torch.float32)
+        if self.time_pair_weight > 0:
+            class_weights, instance_weights = sample_relation_weights(
+                timestep,
+                self.n_timesteps,
+                mode=self.time_mode,
+                strength=self.time_strength,
+            )
+            pair_losses = time_aware_pair_losses(
+                generated_embedding,
+                semantic_attributes,
+                contrastive_teacher,
+                labels,
+                class_weights,
+                instance_weights,
+            )
+            pair_class = pair_losses["class"]
+            pair_instance = pair_losses["instance"]
+
+        pair_total = (
+            self.semantic_weight * pair_class
+            + self.contrastive_weight * pair_instance
         )
-        total = (
-            self.class_weight * class_t_weight * parts["class"]
-            + self.instance_weight * instance_t_weight * parts["instance"]
-        )
+        total = legacy_total + self.time_pair_weight * pair_total
         return {
-            "class": parts["class"],
-            "instance": parts["instance"],
-            "class_weight": class_t_weight,
-            "instance_weight": instance_t_weight,
+            "semantic": semantic["total"],
+            "contrastive": contrastive["total"],
+            "distance": (
+                self.semantic_weight * semantic["distance"]
+                + self.contrastive_weight * contrastive["distance"]
+            ),
+            "angle": (
+                self.semantic_weight * semantic["angle"]
+                + self.contrastive_weight * contrastive["angle"]
+            ),
+            "pair_class": pair_class,
+            "pair_instance": pair_instance,
+            "pair_total": pair_total,
+            "class_weight": class_weights.mean(),
+            "instance_weight": instance_weights.mean(),
+            "legacy_total": legacy_total,
             "total": total,
         }
