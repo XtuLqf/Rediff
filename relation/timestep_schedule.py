@@ -2,8 +2,39 @@
 
 from __future__ import annotations
 
-import torch
 from typing import Tuple
+
+import torch
+
+
+def sample_relation_group_timesteps(
+    labels: torch.Tensor,
+    n_timesteps: int,
+) -> torch.Tensor:
+    """Assign each class to one timestep while balancing samples across groups."""
+    if n_timesteps < 1:
+        raise ValueError("n_timesteps must be positive.")
+    if labels.ndim != 1:
+        raise ValueError("labels must be a one-dimensional tensor.")
+    if labels.numel() == 0:
+        return labels.new_empty(0)
+
+    classes, counts = torch.unique(labels, sorted=False, return_counts=True)
+    class_order = torch.randperm(classes.numel(), device=labels.device)
+    group_loads = torch.zeros(n_timesteps, dtype=torch.long, device=labels.device)
+    timesteps = torch.empty_like(labels, dtype=torch.long)
+    for class_index in class_order:
+        lightest = torch.nonzero(
+            group_loads == group_loads.min(),
+            as_tuple=False,
+        ).flatten()
+        chosen = lightest[
+            torch.randint(lightest.numel(), (1,), device=labels.device)
+        ].squeeze(0)
+        label = classes[class_index]
+        timesteps[labels == label] = chosen
+        group_loads[chosen] += counts[class_index]
+    return timesteps
 
 
 def sample_relation_weights(

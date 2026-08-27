@@ -135,18 +135,20 @@ def time_aware_pair_losses(
     semantic_features: torch.Tensor,
     contrastive_features: torch.Tensor,
     labels: torch.Tensor,
+    timesteps: torch.Tensor,
     class_sample_weights: torch.Tensor,
     instance_sample_weights: torch.Tensor,
 ) -> Dict[str, torch.Tensor]:
-    """Split pair space into disjoint cross-class and within-class relations."""
+    """Align disjoint topologies only for pairs at the same diffusion time."""
     same_class = labels[:, None].eq(labels[None, :])
+    same_timestep = timesteps[:, None].eq(timesteps[None, :])
     off_diagonal = ~torch.eye(
         labels.shape[0],
         dtype=torch.bool,
         device=labels.device,
     )
-    class_mask = ~same_class
-    instance_mask = same_class & off_diagonal
+    class_mask = ~same_class & same_timestep
+    instance_mask = same_class & off_diagonal & same_timestep
 
     student_distances = pairwise_distances(student_features)
     with torch.no_grad():
@@ -182,4 +184,6 @@ def time_aware_pair_losses(
             instance_mask,
             instance_sample_weights,
         ),
+        "class_pairs": class_mask.sum(),
+        "instance_pairs": instance_mask.sum(),
     }

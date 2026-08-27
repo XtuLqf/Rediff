@@ -60,7 +60,7 @@ Firstly, download these datasets as well as the xlsa17 and our data splitting an
 ## Training
 
 The isolated baseline diagnostics are documented in `diagnostics/README.md`.
-The time-aware VSRA method and its class/instance timestep ablation
+The time-aware multi-granularity relation method and its class/instance ablation
 order are documented in `RELATION_CONSISTENCY.md`. End-to-end commands for the
 Python 3.10 / PyTorch 2.9.1+cu130 Linux server are in `SERVER_RUNBOOK.md`.
 

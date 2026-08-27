@@ -14,7 +14,7 @@ import zerodiff_tools
 from sklearn import preprocessing
 import numpy as np
 import os
-from relation import TimeAwareVSRA
+from relation import TimeAwareVSRA, sample_relation_group_timesteps
 
 class Logger(object):
     def __init__(self, filename):
@@ -290,6 +290,8 @@ class ZERODIFF(torch.nn.Module):
         self.interval_recorder_sum['rel_contrastive_loss'] = 0.0
         self.interval_recorder_sum['rel_pair_class_loss'] = 0.0
         self.interval_recorder_sum['rel_pair_instance_loss'] = 0.0
+        self.interval_recorder_sum['rel_class_pairs'] = 0.0
+        self.interval_recorder_sum['rel_instance_pairs'] = 0.0
         self.interval_recorder_sum['rel_legacy_loss'] = 0.0
         self.interval_recorder_sum['rel_real_semantic_loss'] = 0.0
         self.interval_recorder_sum['rel_real_contrastive_loss'] = 0.0
@@ -464,13 +466,16 @@ class ZERODIFF(torch.nn.Module):
 
         z, means, log_var = self.netE(x_0_real, att_0_real)
 
-        _ts_feat = torch.randint(
-            0,
-            self.n_T,
-            (x_0_real.shape[0],),
-            dtype=torch.int64,
-            device=self.device,
-        )
+        if self.relationship_enabled and self.time_aware_vsra.time_pair_weight > 0:
+            _ts_feat = sample_relation_group_timesteps(label, self.n_T)
+        else:
+            _ts_feat = torch.randint(
+                0,
+                self.n_T,
+                (x_0_real.shape[0],),
+                dtype=torch.int64,
+                device=self.device,
+            )
         x_t_real, x_tp1_real, _ = self.q_sample_pairs(x_0_real, _ts_feat)
         x_0_fake = self.netG(z, att_0_real, con_0_real, x_tp1_real.detach(), _ts_feat)
         x_t_fake = self.sample_posterior(x_0_fake, x_tp1_real, _ts_feat)
@@ -505,6 +510,8 @@ class ZERODIFF(torch.nn.Module):
             self.interval_recorder_sum['rel_contrastive_loss'] += relation_losses['contrastive'].detach().item()
             self.interval_recorder_sum['rel_pair_class_loss'] += relation_losses['pair_class'].detach().item()
             self.interval_recorder_sum['rel_pair_instance_loss'] += relation_losses['pair_instance'].detach().item()
+            self.interval_recorder_sum['rel_class_pairs'] += relation_losses['class_pairs'].detach().item()
+            self.interval_recorder_sum['rel_instance_pairs'] += relation_losses['instance_pairs'].detach().item()
             self.interval_recorder_sum['rel_legacy_loss'] += relation_losses['legacy_total'].detach().item()
             self.interval_recorder_sum['rel_total_loss'] += relation_losses['total'].detach().item()
             self.interval_recorder_sum['rel_class_t_weight'] += relation_losses['class_weight'].detach().item()
@@ -671,6 +678,8 @@ for epoch in range(0, opt.nepoch):
                 'rel_contrastive_loss',
                 'rel_pair_class_loss',
                 'rel_pair_instance_loss',
+                'rel_class_pairs',
+                'rel_instance_pairs',
                 'rel_legacy_loss',
                 'rel_real_semantic_loss',
                 'rel_real_contrastive_loss',
@@ -703,8 +712,8 @@ for epoch in range(0, opt.nepoch):
         logger.write(log_record + '\n')
 
         log_record = (
-            '[%d/%d] TerminalVSRA semantic/con: %.6f/%.6f, legacy: %.6f, '
-            'time_pair(C/I): %.6f/%.6f, total: %.6f, '
+            '[%d/%d] Relation static semantic/con: %.6f/%.6f, legacy: %.6f, '
+            'time_pair(C/I): %.6f/%.6f, pairs(C/I): %.1f/%.1f, total: %.6f, '
             't: %.4f, w_class(t): %.4f, w_instance(t): %.4f'
             % (
                 epoch,
@@ -714,6 +723,8 @@ for epoch in range(0, opt.nepoch):
                 relation_epoch_stats['rel_legacy_loss'],
                 relation_epoch_stats['rel_pair_class_loss'],
                 relation_epoch_stats['rel_pair_instance_loss'],
+                relation_epoch_stats['rel_class_pairs'],
+                relation_epoch_stats['rel_instance_pairs'],
                 relation_epoch_stats['rel_total_loss'],
                 relation_epoch_stats['rel_timestep'],
                 relation_epoch_stats['rel_class_t_weight'],

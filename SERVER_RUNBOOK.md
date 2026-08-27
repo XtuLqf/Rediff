@@ -7,8 +7,8 @@
   exporters, gradient probes, and offline plotting. Use it to train/select a
   clean baseline checkpoint and produce the motivation figures.
 - `codex/time-aware-relational-consistency` is the proposed-method branch. It
-  contains the same diagnostics plus terminal VSRA with diffusion-timestep
-  coordinated semantic and contrastive topology.
+  contains the same diagnostics plus a calibrated relation space with
+  diffusion-timestep coordinated semantic and contrastive topology.
   Use it only after the baseline evidence is fixed.
 
 These branches are currently local until they are pushed. From the development
@@ -158,12 +158,13 @@ python scripts/run_awa2_zerodiff_DFG_train.py \
   --rel_proj_dim 512 \
   --rel_teacher_anchor_weight 1.0 \
   --rel_dist_ratio 1.0 --rel_angle_ratio 2.0 --rel_use_angle \
-  --rel_time_pair_weight 0.1 \
+  --rel_time_pair_weight 1.0 \
   --rel_time_mode class_up_instance_down \
   --rel_time_strength 0.5
 ```
 
 First run `--rel_time_pair_weight 0` to reproduce the VSRA anchor, then enable
-the proposed value `0.1`. Use `--gamma_rel 0` as the same-code baseline-equivalence
-control. Set either component weight to zero for the class-only and instance-only
-ablations.
+the proposed value `1`. Values between zero and one form a constant-budget
+interpolation instead of adding both objectives. Use `--gamma_rel 0` as the
+same-code baseline-equivalence control. Set either component weight to zero for
+the class-only and instance-only ablations.

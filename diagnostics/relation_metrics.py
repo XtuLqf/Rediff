@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List
 
 import numpy as np
 import torch
@@ -22,12 +22,6 @@ def pairwise_distances(features: torch.Tensor, eps: float = 1e-12) -> torch.Tens
     return distances
 
 
-def normalize_relation(distances: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
-    positive = distances[distances > 0]
-    scale = positive.mean() if positive.numel() else distances.new_tensor(1.0)
-    return distances / scale.clamp_min(eps)
-
-
 def upper_triangle(matrix: torch.Tensor) -> torch.Tensor:
     indices = torch.triu_indices(
         matrix.shape[0], matrix.shape[1], offset=1, device=matrix.device
@@ -35,12 +29,42 @@ def upper_triangle(matrix: torch.Tensor) -> torch.Tensor:
     return matrix[indices[0], indices[1]]
 
 
-def class_prototypes(
-    features: torch.Tensor, labels: torch.Tensor
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    classes = torch.unique(labels, sorted=True)
-    prototypes = torch.stack([features[labels == label].mean(dim=0) for label in classes])
-    return prototypes, classes
+def topology_masks(labels: torch.Tensor) -> Dict[str, torch.Tensor]:
+    """Match the cross-class and within-class masks used by training."""
+    same_class = labels[:, None].eq(labels[None, :])
+    off_diagonal = ~torch.eye(
+        labels.shape[0], dtype=torch.bool, device=labels.device
+    )
+    return {
+        "class": ~same_class,
+        "instance": same_class & off_diagonal,
+    }
+
+
+def masked_relation_vector(
+    features: torch.Tensor,
+    mask: torch.Tensor,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    """Normalize within one topology and return its selected pair vector."""
+    distances = pairwise_distances(features, eps=eps)
+    selected = distances.masked_select(mask)
+    positive = selected[selected > 0]
+    scale = positive.mean() if positive.numel() else distances.new_tensor(1.0)
+    return selected / scale.clamp_min(eps)
+
+
+def _masked_alignment_loss(
+    student_features: torch.Tensor,
+    teacher_features: torch.Tensor,
+    mask: torch.Tensor,
+) -> torch.Tensor:
+    student = masked_relation_vector(student_features, mask)
+    with torch.no_grad():
+        teacher = masked_relation_vector(teacher_features.detach(), mask)
+    if not student.numel():
+        return student_features.sum() * 0.0
+    return F.smooth_l1_loss(student, teacher)
 
 
 def class_relation_loss(
@@ -48,34 +72,11 @@ def class_relation_loss(
     attributes: torch.Tensor,
     labels: torch.Tensor,
 ) -> torch.Tensor:
-    visual_prototypes, classes = class_prototypes(visual_features, labels)
-    semantic_prototypes = torch.stack(
-        [attributes[labels == label][0] for label in classes]
+    return _masked_alignment_loss(
+        visual_features,
+        attributes,
+        topology_masks(labels)["class"],
     )
-    visual_relation = normalize_relation(pairwise_distances(visual_prototypes))
-    semantic_relation = normalize_relation(pairwise_distances(semantic_prototypes)).detach()
-    return F.smooth_l1_loss(visual_relation, semantic_relation)
-
-
-def _within_class_vectors(
-    visual_features: torch.Tensor,
-    contrastive_features: torch.Tensor,
-    labels: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    visual_vectors: List[torch.Tensor] = []
-    contrastive_vectors: List[torch.Tensor] = []
-    for label in torch.unique(labels, sorted=True):
-        mask = labels == label
-        if int(mask.sum()) < 2:
-            continue
-        visual_vectors.append(upper_triangle(normalize_relation(pairwise_distances(visual_features[mask]))))
-        contrastive_vectors.append(
-            upper_triangle(normalize_relation(pairwise_distances(contrastive_features[mask]))).detach()
-        )
-    if not visual_vectors:
-        empty = visual_features.new_empty(0)
-        return empty, empty
-    return torch.cat(visual_vectors), torch.cat(contrastive_vectors)
 
 
 def instance_relation_loss(
@@ -83,12 +84,11 @@ def instance_relation_loss(
     contrastive_features: torch.Tensor,
     labels: torch.Tensor,
 ) -> torch.Tensor:
-    visual_vector, contrastive_vector = _within_class_vectors(
-        visual_features, contrastive_features, labels
+    return _masked_alignment_loss(
+        visual_features,
+        contrastive_features,
+        topology_masks(labels)["instance"],
     )
-    if not visual_vector.numel():
-        return visual_features.sum() * 0.0
-    return F.smooth_l1_loss(visual_vector, contrastive_vector)
 
 
 def safe_spearman(left: torch.Tensor, right: torch.Tensor) -> float:
@@ -105,13 +105,10 @@ def class_relation_correlation(
     attributes: torch.Tensor,
     labels: torch.Tensor,
 ) -> float:
-    visual_prototypes, classes = class_prototypes(visual_features, labels)
-    semantic_prototypes = torch.stack(
-        [attributes[labels == label][0] for label in classes]
-    )
+    mask = topology_masks(labels)["class"]
     return safe_spearman(
-        upper_triangle(pairwise_distances(visual_prototypes)),
-        upper_triangle(pairwise_distances(semantic_prototypes)),
+        masked_relation_vector(visual_features, mask),
+        masked_relation_vector(attributes, mask),
     )
 
 
@@ -120,10 +117,11 @@ def instance_relation_correlation(
     contrastive_features: torch.Tensor,
     labels: torch.Tensor,
 ) -> float:
-    visual_vector, contrastive_vector = _within_class_vectors(
-        visual_features, contrastive_features, labels
+    mask = topology_masks(labels)["instance"]
+    return safe_spearman(
+        masked_relation_vector(visual_features, mask),
+        masked_relation_vector(contrastive_features, mask),
     )
-    return safe_spearman(visual_vector, contrastive_vector)
 
 
 def temporal_relation_correlation(
@@ -140,11 +138,10 @@ def class_temporal_relation_correlation(
     previous: torch.Tensor,
     labels: torch.Tensor,
 ) -> float:
-    current_prototypes, _ = class_prototypes(current, labels)
-    previous_prototypes, _ = class_prototypes(previous, labels)
+    mask = topology_masks(labels)["class"]
     return safe_spearman(
-        upper_triangle(pairwise_distances(current_prototypes)),
-        upper_triangle(pairwise_distances(previous_prototypes)),
+        masked_relation_vector(current, mask),
+        masked_relation_vector(previous, mask),
     )
 
 
@@ -153,8 +150,11 @@ def instance_temporal_relation_correlation(
     previous: torch.Tensor,
     labels: torch.Tensor,
 ) -> float:
-    current_vector, previous_vector = _within_class_vectors(current, previous, labels)
-    return safe_spearman(current_vector, previous_vector)
+    mask = topology_masks(labels)["instance"]
+    return safe_spearman(
+        masked_relation_vector(current, mask),
+        masked_relation_vector(previous, mask),
+    )
 
 
 def class_temporal_relation_loss(
@@ -162,11 +162,11 @@ def class_temporal_relation_loss(
     previous: torch.Tensor,
     labels: torch.Tensor,
 ) -> torch.Tensor:
-    current_prototypes, _ = class_prototypes(current, labels)
-    previous_prototypes, _ = class_prototypes(previous, labels)
-    current_relation = normalize_relation(pairwise_distances(current_prototypes))
-    previous_relation = normalize_relation(pairwise_distances(previous_prototypes)).detach()
-    return F.smooth_l1_loss(current_relation, previous_relation)
+    return _masked_alignment_loss(
+        current,
+        previous,
+        topology_masks(labels)["class"],
+    )
 
 
 def instance_temporal_relation_loss(
@@ -174,10 +174,11 @@ def instance_temporal_relation_loss(
     previous: torch.Tensor,
     labels: torch.Tensor,
 ) -> torch.Tensor:
-    current_vector, previous_vector = _within_class_vectors(current, previous, labels)
-    if not current_vector.numel():
-        return current.sum() * 0.0
-    return F.smooth_l1_loss(current_vector, previous_vector)
+    return _masked_alignment_loss(
+        current,
+        previous,
+        topology_masks(labels)["instance"],
+    )
 
 
 def timestep_metrics(
@@ -187,6 +188,9 @@ def timestep_metrics(
     labels: torch.Tensor,
 ) -> List[Dict[str, float]]:
     rows: List[Dict[str, float]] = []
+    masks = topology_masks(labels)
+    class_pair_count = int(masks["class"].sum().item())
+    instance_pair_count = int(masks["instance"].sum().item())
     previous = None
     for timestep, prediction in enumerate(predictions):
         temporal = float("nan") if previous is None else temporal_relation_correlation(prediction, previous)
@@ -213,6 +217,8 @@ def timestep_metrics(
         rows.append(
             {
                 "timestep": timestep,
+                "class_pair_count": class_pair_count,
+                "instance_pair_count": instance_pair_count,
                 "class_relation_spearman": class_relation_correlation(
                     prediction, attributes, labels
                 ),

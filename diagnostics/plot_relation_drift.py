@@ -38,18 +38,15 @@ def pairwise(features: np.ndarray) -> np.ndarray:
     return distances / (positive.mean() if positive.size else 1.0)
 
 
-def prototypes(features: np.ndarray, labels: np.ndarray) -> np.ndarray:
-    return np.stack(
-        [features[labels == label].mean(axis=0) for label in np.unique(labels)]
-    )
-
-
-def within_class_matrix(features: np.ndarray, labels: np.ndarray) -> np.ndarray:
-    matrix = np.full((labels.size, labels.size), np.nan, dtype=float)
-    for label in np.unique(labels):
-        indices = np.flatnonzero(labels == label)
-        matrix[np.ix_(indices, indices)] = pairwise(features[indices])
-    return matrix
+def masked_topology_matrix(
+    features: np.ndarray,
+    mask: np.ndarray,
+) -> np.ndarray:
+    relation = pairwise(features)
+    selected = relation[mask]
+    positive = selected[selected > 0]
+    relation = relation / (positive.mean() if positive.size else 1.0)
+    return np.where(mask, relation, np.nan)
 
 
 def finite_max(matrices) -> float:
@@ -58,10 +55,18 @@ def finite_max(matrices) -> float:
 
 
 def topology_matrices(predictions, attributes, contrastive, labels):
-    class_reference = pairwise(prototypes(attributes, labels))
-    instance_reference = within_class_matrix(contrastive, labels)
-    class_visual = [pairwise(prototypes(item, labels)) for item in predictions]
-    instance_visual = [within_class_matrix(item, labels) for item in predictions]
+    same_class = labels[:, None] == labels[None, :]
+    off_diagonal = ~np.eye(labels.size, dtype=bool)
+    class_mask = ~same_class
+    instance_mask = same_class & off_diagonal
+    class_reference = masked_topology_matrix(attributes, class_mask)
+    instance_reference = masked_topology_matrix(contrastive, instance_mask)
+    class_visual = [
+        masked_topology_matrix(item, class_mask) for item in predictions
+    ]
+    instance_visual = [
+        masked_topology_matrix(item, instance_mask) for item in predictions
+    ]
     return class_reference, instance_reference, class_visual, instance_visual
 
 
@@ -90,8 +95,8 @@ def plot_topology_heatmaps(
     instance_image = axes[1, 0].imshow(
         instance_reference, cmap=instance_cmap, vmin=0.0, vmax=instance_scale
     )
-    axes[0, 0].set_title("Semantic class topology")
-    axes[1, 0].set_title("Contrastive instance topology")
+    axes[0, 0].set_title("Cross-class semantic topology")
+    axes[1, 0].set_title("Within-class PaCo topology")
     for timestep in range(n_timesteps):
         axes[0, timestep + 1].imshow(
             class_visual[timestep], cmap="viridis", vmin=0.0, vmax=class_scale
@@ -102,8 +107,8 @@ def plot_topology_heatmaps(
             vmin=0.0,
             vmax=instance_scale,
         )
-        axes[0, timestep + 1].set_title(f"Generated class, t={timestep}")
-        axes[1, timestep + 1].set_title(f"Generated instance, t={timestep}")
+        axes[0, timestep + 1].set_title(f"Generated cross-class, t={timestep}")
+        axes[1, timestep + 1].set_title(f"Generated within-class, t={timestep}")
     for axis in axes.flat:
         axis.set_xticks([])
         axis.set_yticks([])

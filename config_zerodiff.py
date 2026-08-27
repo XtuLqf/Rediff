@@ -65,8 +65,8 @@ parser.add_argument("--rel_dist_ratio", type=float, default=1.0)
 parser.add_argument("--rel_angle_ratio", type=float, default=2.0)
 parser.add_argument("--rel_angle_max_samples", type=int, default=128)
 parser.add_argument("--rel_use_angle", action="store_true", default=False)
-parser.add_argument("--rel_time_pair_weight", type=float, default=0.1,
-                    help="weight of diffusion-timestep coordinated pair topology")
+parser.add_argument("--rel_time_pair_weight", type=float, default=1.0,
+                    help="convex mix from static VSRA (0) to time-aware dual topology (1)")
 parser.add_argument("--rel_time_mode", default="class_up_instance_down",
                     choices=["fixed", "class_up_instance_down"])
 parser.add_argument("--rel_time_strength", type=float, default=0.5,
@@ -103,4 +103,6 @@ if opt.rel_angle_max_samples < 0:
     parser.error("rel_angle_max_samples must be non-negative")
 if not 0.0 <= opt.rel_time_strength <= 1.0:
     parser.error("rel_time_strength must be in [0, 1]")
+if not 0.0 <= opt.rel_time_pair_weight <= 1.0:
+    parser.error("rel_time_pair_weight must be in [0, 1]")
 

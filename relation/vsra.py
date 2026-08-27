@@ -39,7 +39,7 @@ class RelationProjector(nn.Module):
 
 
 class TimeAwareVSRA(nn.Module):
-    """Restore original terminal VSRA and add a vectorized diffusion-time term."""
+    """Calibrate VSRA space and interpolate static/time-aware generator losses."""
 
     def __init__(
         self,
@@ -66,6 +66,8 @@ class TimeAwareVSRA(nn.Module):
         self.angle_ratio = angle_ratio
         self.angle_max_samples = angle_max_samples
         self.time_pair_weight = time_pair_weight
+        if not 0.0 <= self.time_pair_weight <= 1.0:
+            raise ValueError("time_pair_weight must be in [0, 1].")
         self.time_mode = time_mode
         self.time_strength = time_strength
         self.visual_projector = RelationProjector(visual_dim, projection_dim)
@@ -138,16 +140,34 @@ class TimeAwareVSRA(nn.Module):
                 real_contrastive.detach()
             )
 
-        semantic = self._align(generated_embedding, semantic_attributes)
-        contrastive = self._align(generated_embedding, contrastive_teacher)
-        legacy_total = (
-            self.semantic_weight * semantic["total"]
-            + self.contrastive_weight * contrastive["total"]
-        )
-
         zero = generated_embedding.sum() * 0.0
+        semantic_total = zero
+        contrastive_total = zero
+        legacy_distance = zero
+        legacy_angle = zero
+        legacy_total = zero
+        if self.time_pair_weight < 1.0:
+            semantic = self._align(generated_embedding, semantic_attributes)
+            contrastive = self._align(generated_embedding, contrastive_teacher)
+            semantic_total = semantic["total"]
+            contrastive_total = contrastive["total"]
+            legacy_distance = (
+                self.semantic_weight * semantic["distance"]
+                + self.contrastive_weight * contrastive["distance"]
+            )
+            legacy_angle = (
+                self.semantic_weight * semantic["angle"]
+                + self.contrastive_weight * contrastive["angle"]
+            )
+            legacy_total = (
+                self.semantic_weight * semantic_total
+                + self.contrastive_weight * contrastive_total
+            )
+
         pair_class = zero
         pair_instance = zero
+        class_pairs = torch.zeros((), dtype=torch.long, device=timestep.device)
+        instance_pairs = torch.zeros((), dtype=torch.long, device=timestep.device)
         class_weights = torch.ones_like(timestep, dtype=torch.float32)
         instance_weights = torch.ones_like(timestep, dtype=torch.float32)
         if self.time_pair_weight > 0:
@@ -162,31 +182,36 @@ class TimeAwareVSRA(nn.Module):
                 semantic_attributes,
                 contrastive_teacher,
                 labels,
+                timestep,
                 class_weights,
                 instance_weights,
             )
             pair_class = pair_losses["class"]
             pair_instance = pair_losses["instance"]
+            class_pairs = pair_losses["class_pairs"]
+            instance_pairs = pair_losses["instance_pairs"]
 
         pair_total = (
-            self.semantic_weight * pair_class
-            + self.contrastive_weight * pair_instance
+            self.distance_ratio
+            * (
+                self.semantic_weight * pair_class
+                + self.contrastive_weight * pair_instance
+            )
         )
-        total = legacy_total + self.time_pair_weight * pair_total
+        total = (
+            (1.0 - self.time_pair_weight) * legacy_total
+            + self.time_pair_weight * pair_total
+        )
         return {
-            "semantic": semantic["total"],
-            "contrastive": contrastive["total"],
-            "distance": (
-                self.semantic_weight * semantic["distance"]
-                + self.contrastive_weight * contrastive["distance"]
-            ),
-            "angle": (
-                self.semantic_weight * semantic["angle"]
-                + self.contrastive_weight * contrastive["angle"]
-            ),
+            "semantic": semantic_total,
+            "contrastive": contrastive_total,
+            "distance": legacy_distance,
+            "angle": legacy_angle,
             "pair_class": pair_class,
             "pair_instance": pair_instance,
             "pair_total": pair_total,
+            "class_pairs": class_pairs,
+            "instance_pairs": instance_pairs,
             "class_weight": class_weights.mean(),
             "instance_weight": instance_weights.mean(),
             "legacy_total": legacy_total,

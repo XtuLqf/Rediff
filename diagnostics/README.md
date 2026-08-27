@@ -10,8 +10,9 @@ embedders, adaptive gates, or relation optimizers.
 - No diagnostic script calls `optimizer.step()` or writes a checkpoint.
 - Model-dependent scripts write only under `out/diagnostics/baseline/` by default.
 - Plotting scripts read `.npz`/`.csv` artifacts and never import a model.
-- Class relations use unique class prototypes; instance relations use within-class
-  pairs, so repeated class attributes cannot masquerade as instance supervision.
+- Class relations use cross-class sample pairs with the class-shared semantic
+  teacher; instance relations use same-class sample pairs with the PaCo teacher.
+  Masking and mask-local normalization exactly match proposed-method training.
 
 The original clean DFG checkpoints do not save `state_dict_E`. When it is absent,
 the diagnostic runtime uses a seeded random latent and records
