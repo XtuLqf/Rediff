@@ -72,7 +72,50 @@ static generator constraint and uses only the time-aware dual topology, while
 retaining real-space projector calibration. Intermediate values keep a constant
 relation-loss budget instead of adding duplicate regularization.
 
-## AWA2 runs
+## Three-dataset runs
+
+The AWA2, CUB, and SUN DFG launchers all default to the proposed time-aware
+dual-topology setting (`gamma_rel=1`, `eta=1`, `rho=0.5`). Each launcher keeps
+the dataset-specific ZeroDiff hyperparameters and accepts trailing command-line
+arguments as overrides.
+
+Prepare the dataset-specific clean DRG checkpoint once:
+
+```bash
+python scripts/run_awa2_zerodiff_DRG_train.py
+python scripts/run_cub_zerodiff_DRG_train.py
+python scripts/run_sun_zerodiff_DRG_train.py
+```
+
+Run the proposed method:
+
+```bash
+python scripts/run_awa2_zerodiff_DFG_train.py
+python scripts/run_cub_zerodiff_DFG_train.py
+python scripts/run_sun_zerodiff_DFG_train.py
+```
+
+For a controlled comparison on any launcher, append one of these overrides:
+
+```bash
+# ZeroDiff-equivalent control: no relation objective
+--gamma_rel 0
+
+# Restored static VSRA anchor
+--gamma_rel 1 --rel_time_pair_weight 0
+
+# Constant-budget midpoint ablation
+--gamma_rel 1 --rel_time_pair_weight 0.5
+
+# Proposed time-aware dual topology
+--gamma_rel 1 --rel_time_pair_weight 1
+```
+
+Use the same DRG checkpoint and seed for the four DFG runs of a dataset. The
+launcher appends overrides after its defaults, so the final occurrence of a
+scalar option is used by `argparse`.
+
+## AWA2 examples
 
 Restored VSRA anchor:
 
@@ -92,7 +135,6 @@ python scripts/run_awa2_zerodiff_DFG_train.py \
   --rel_time_strength 0.5
 ```
 
-Both runs use `gamma_dist=0`, projection dimension 512, distance ratio 1, and
-angle ratio 2 in the AWA2 launcher. The angle loss applies to calibration and
-the static VSRA control; the proposed `eta=1` generator objective is the masked
-distance topology itself.
+All three launchers use projection dimension 512, distance ratio 1, and angle
+ratio 2. The angle loss applies to calibration and the static VSRA control; the
+proposed `eta=1` generator objective is the masked distance topology itself.
