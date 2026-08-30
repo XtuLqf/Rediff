@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 import numpy as np
 import torch
@@ -186,6 +186,7 @@ def timestep_metrics(
     attributes: torch.Tensor,
     contrastive_features: torch.Tensor,
     labels: torch.Tensor,
+    signal_retention: Optional[torch.Tensor] = None,
 ) -> List[Dict[str, float]]:
     rows: List[Dict[str, float]] = []
     masks = topology_masks(labels)
@@ -193,6 +194,16 @@ def timestep_metrics(
     instance_pair_count = int(masks["instance"].sum().item())
     previous = None
     for timestep, prediction in enumerate(predictions):
+        retention = (
+            float("nan")
+            if signal_retention is None
+            else float(signal_retention[timestep].detach().cpu())
+        )
+        snr = (
+            float("nan")
+            if signal_retention is None
+            else retention / max(1.0 - retention, 1e-12)
+        )
         temporal = float("nan") if previous is None else temporal_relation_correlation(prediction, previous)
         adjacent_class = (
             float("nan")
@@ -217,6 +228,8 @@ def timestep_metrics(
         rows.append(
             {
                 "timestep": timestep,
+                "signal_retention": retention,
+                "snr": snr,
                 "class_pair_count": class_pair_count,
                 "instance_pair_count": instance_pair_count,
                 "class_relation_spearman": class_relation_correlation(

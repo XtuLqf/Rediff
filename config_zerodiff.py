@@ -67,10 +67,16 @@ parser.add_argument("--rel_angle_max_samples", type=int, default=128)
 parser.add_argument("--rel_use_angle", action="store_true", default=False)
 parser.add_argument("--rel_time_pair_weight", type=float, default=1.0,
                     help="convex mix from static VSRA (0) to time-aware dual topology (1)")
-parser.add_argument("--rel_time_mode", default="class_up_instance_down",
-                    choices=["fixed", "class_up_instance_down"])
+parser.add_argument("--rel_time_mode", default="diffusion_reliability",
+                    choices=["fixed", "class_up_instance_down", "diffusion_reliability"],
+                    help="relation coordination: fixed, legacy linear, or diffusion-state reliability")
 parser.add_argument("--rel_time_strength", type=float, default=0.5,
-                    help="symmetric class/instance weight variation around 1")
+                    help="diffusion sensitivity; 0 exactly recovers fixed topology weighting")
+parser.add_argument("--rel_reliability_floor", type=float, default=0.5,
+                    help="minimum trust retained for either topology at low SNR")
+parser.add_argument("--rel_topology_norm", default="timestep",
+                    choices=["global", "timestep"],
+                    help="normalize relation distances globally or within each timestep")
 ###
 parser.add_argument("--embed_type",  default='V', help='V/VA')
 parser.add_argument("--n_T", type=int, default=4)
@@ -103,6 +109,8 @@ if opt.rel_angle_max_samples < 0:
     parser.error("rel_angle_max_samples must be non-negative")
 if not 0.0 <= opt.rel_time_strength <= 1.0:
     parser.error("rel_time_strength must be in [0, 1]")
+if not 0.0 <= opt.rel_reliability_floor <= 1.0:
+    parser.error("rel_reliability_floor must be in [0, 1]")
 if not 0.0 <= opt.rel_time_pair_weight <= 1.0:
     parser.error("rel_time_pair_weight must be in [0, 1]")
 

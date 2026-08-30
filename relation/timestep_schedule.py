@@ -1,4 +1,4 @@
-"""Timestep weights for class- and instance-level VSRA supervision."""
+"""Diffusion-state weights for class- and instance-level supervision."""
 
 from __future__ import annotations
 
@@ -40,14 +40,24 @@ def sample_relation_group_timesteps(
 def sample_relation_weights(
     timestep: torch.Tensor,
     n_timesteps: int,
-    mode: str = "class_up_instance_down",
+    mode: str = "fixed",
     strength: float = 0.5,
+    signal_retention: torch.Tensor | None = None,
+    reliability_floor: float = 0.5,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Coordinate class and instance reliability along diffusion time."""
+    """Coordinate relation reliability along the actual diffusion schedule.
+
+    ``diffusion_reliability`` uses the signal power of the generator input
+    ``x_{t+1}``. Both topology losses become less trusted as signal vanishes,
+    while the instance topology decays faster than the coarser class topology.
+    ``strength=0`` is the exact fixed-weight anchor.
+    """
     if n_timesteps < 1:
         raise ValueError("n_timesteps must be positive.")
     if not 0.0 <= strength <= 1.0:
         raise ValueError("strength must be in [0, 1].")
+    if not 0.0 <= reliability_floor <= 1.0:
+        raise ValueError("reliability_floor must be in [0, 1].")
 
     if n_timesteps == 1:
         progress = timestep.float() * 0.0 + 0.5
@@ -60,6 +70,27 @@ def sample_relation_weights(
     elif mode == "class_up_instance_down":
         class_weight = 1.0 + strength * direction
         instance_weight = 1.0 - strength * direction
+    elif mode == "diffusion_reliability":
+        if signal_retention is None:
+            raise ValueError(
+                "diffusion_reliability requires per-timestep signal_retention."
+            )
+        if signal_retention.ndim != 1 or signal_retention.numel() != n_timesteps:
+            raise ValueError(
+                "signal_retention must contain one value per generator timestep."
+            )
+        retention = signal_retention.to(
+            device=timestep.device,
+            dtype=torch.float32,
+        )[timestep.long()].clamp(1e-12, 1.0)
+        class_reliability = retention.pow(0.5 * strength)
+        instance_reliability = retention.pow(strength)
+        class_weight = reliability_floor + (
+            1.0 - reliability_floor
+        ) * class_reliability
+        instance_weight = reliability_floor + (
+            1.0 - reliability_floor
+        ) * instance_reliability
     else:
         raise ValueError(f"Unknown relation timestep mode: {mode}")
     return class_weight, instance_weight

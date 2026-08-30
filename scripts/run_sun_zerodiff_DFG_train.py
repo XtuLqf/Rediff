@@ -54,7 +54,9 @@ command = [
 	'--gamma_rel', '1.0', '--rel_class_weight', '1.0', '--rel_instance_weight', '1.0',
 	'--rel_proj_dim', '512', '--rel_teacher_anchor_weight', '1.0',
 	'--rel_dist_ratio', '1.0', '--rel_angle_ratio', '2.0', '--rel_angle_max_samples', '128', '--rel_use_angle',
-	'--rel_time_pair_weight', '1.0', '--rel_time_mode', 'class_up_instance_down', '--rel_time_strength', '0.5',
+	'--rel_time_pair_weight', '1.0', '--rel_time_mode', 'diffusion_reliability', '--rel_time_strength', '0.5',
+	'--rel_reliability_floor', '0.5',
+	'--rel_topology_norm', 'timestep',
 	'--netR_model_path', str(NETR_MODEL),
 ]
 command.extend(sys.argv[1:])

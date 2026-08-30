@@ -51,6 +51,26 @@ def _normalize_relation_on_mask(
     return relation / scale.clamp_min(eps)
 
 
+def _normalize_relation_by_timestep(
+    relation: torch.Tensor,
+    mask: torch.Tensor,
+    timesteps: torch.Tensor,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    """Normalize each same-timestep topology block independently."""
+    normalized = torch.zeros_like(relation)
+    for timestep in torch.unique(timesteps):
+        members = timesteps.eq(timestep)
+        block_mask = mask & members[:, None] & members[None, :]
+        selected = relation.masked_select(block_mask)
+        positive = selected[selected > 0]
+        if positive.numel() == 0:
+            continue
+        scale = positive.mean().clamp_min(eps)
+        normalized = normalized + (relation / scale) * block_mask.to(relation.dtype)
+    return normalized
+
+
 def rkd_distance_loss(
     student_features: torch.Tensor,
     teacher_features: torch.Tensor,
@@ -138,8 +158,11 @@ def time_aware_pair_losses(
     timesteps: torch.Tensor,
     class_sample_weights: torch.Tensor,
     instance_sample_weights: torch.Tensor,
+    topology_norm: str = "global",
 ) -> Dict[str, torch.Tensor]:
     """Align disjoint topologies only for pairs at the same diffusion time."""
+    if topology_norm not in {"global", "timestep"}:
+        raise ValueError("topology_norm must be 'global' or 'timestep'.")
     same_class = labels[:, None].eq(labels[None, :])
     same_timestep = timesteps[:, None].eq(timesteps[None, :])
     off_diagonal = ~torch.eye(
@@ -155,21 +178,30 @@ def time_aware_pair_losses(
         semantic_distances = pairwise_distances(semantic_features.detach())
         contrastive_distances = pairwise_distances(contrastive_features.detach())
 
-    class_student_relation = _normalize_relation_on_mask(
+    normalize = (
+        _normalize_relation_by_timestep
+        if topology_norm == "timestep"
+        else lambda relation, mask, _: _normalize_relation_on_mask(relation, mask)
+    )
+    class_student_relation = normalize(
         student_distances,
         class_mask,
+        timesteps,
     )
-    class_semantic_relation = _normalize_relation_on_mask(
+    class_semantic_relation = normalize(
         semantic_distances,
         class_mask,
+        timesteps,
     )
-    instance_student_relation = _normalize_relation_on_mask(
+    instance_student_relation = normalize(
         student_distances,
         instance_mask,
+        timesteps,
     )
-    instance_contrastive_relation = _normalize_relation_on_mask(
+    instance_contrastive_relation = normalize(
         contrastive_distances,
         instance_mask,
+        timesteps,
     )
     return {
         "class": _weighted_pair_loss(

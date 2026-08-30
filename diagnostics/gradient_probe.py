@@ -130,6 +130,10 @@ def main() -> None:
             episode.visual, episode_seed + 200_000
         )
         for timestep in range(options.n_T):
+            signal_retention = float(
+                runtime.relation_signal_retention[timestep].detach().cpu()
+            )
+            snr = signal_retention / max(1.0 - signal_retention, 1e-12)
             prediction = runtime.predict_x0(
                 episode.visual,
                 episode.contrastive,
@@ -177,6 +181,8 @@ def main() -> None:
                     "diagnostic_seed": args.seed,
                     "episode_uid": f"{args.seed}:{episode_id}",
                     "timestep": timestep,
+                    "signal_retention": signal_retention,
+                    "snr": snr,
                     "base_loss": float(base_losses["total"].detach().cpu()),
                     "class_relation_loss": float(semantic_loss.detach().cpu()),
                     "instance_relation_loss": float(contrastive_loss.detach().cpu()),

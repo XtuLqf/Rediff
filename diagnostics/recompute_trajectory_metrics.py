@@ -34,6 +34,12 @@ def main() -> None:
         else {}
     )
     diagnostic_seed = metadata.get("seed", "unknown")
+    signal_retention = metadata.get("relation_signal_retention")
+    signal_retention = (
+        None
+        if signal_retention is None
+        else torch.tensor(signal_retention, dtype=torch.float32)
+    )
     arrays = np.load(args.trajectory)
     rows = []
     for episode_id in range(arrays["predictions"].shape[0]):
@@ -46,6 +52,7 @@ def main() -> None:
             torch.from_numpy(arrays["attributes"][episode_id]),
             torch.from_numpy(arrays["contrastive"][episode_id]),
             torch.from_numpy(arrays["labels"][episode_id]),
+            signal_retention,
         )
         episode_seed = (
             int(diagnostic_seed) + episode_id

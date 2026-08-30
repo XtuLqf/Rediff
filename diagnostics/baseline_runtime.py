@@ -69,6 +69,11 @@ class BaselineRuntime:
     def latent_source(self) -> str:
         return "encoder" if self.netE is not None else "seeded_random"
 
+    @property
+    def relation_signal_retention(self) -> torch.Tensor:
+        """Signal power in the x_{t+1} input used to predict x_0."""
+        return self.prior.sqrt_alphas_bar[1:self.n_T + 1].square()
+
     def make_latent(
         self,
         visual: torch.Tensor,

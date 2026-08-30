@@ -54,8 +54,11 @@ class TimeAwareVSRA(nn.Module):
         angle_ratio: float = 0.0,
         angle_max_samples: int = 128,
         time_pair_weight: float = 0.0,
-        time_mode: str = "class_up_instance_down",
+        time_mode: str = "fixed",
         time_strength: float = 0.5,
+        signal_retention: torch.Tensor | None = None,
+        reliability_floor: float = 0.5,
+        topology_norm: str = "global",
     ) -> None:
         super().__init__()
         self.n_timesteps = n_timesteps
@@ -70,6 +73,26 @@ class TimeAwareVSRA(nn.Module):
             raise ValueError("time_pair_weight must be in [0, 1].")
         self.time_mode = time_mode
         self.time_strength = time_strength
+        self.reliability_floor = reliability_floor
+        if not 0.0 <= self.reliability_floor <= 1.0:
+            raise ValueError("reliability_floor must be in [0, 1].")
+        retention = (
+            torch.empty(0, dtype=torch.float32)
+            if signal_retention is None
+            else signal_retention.detach().float().flatten()
+        )
+        if retention.numel() not in (0, n_timesteps):
+            raise ValueError(
+                "signal_retention must contain one value per generator timestep."
+            )
+        if self.time_mode == "diffusion_reliability" and not retention.numel():
+            raise ValueError(
+                "diffusion_reliability requires the ZeroDiff signal schedule."
+            )
+        self.register_buffer("signal_retention", retention)
+        if topology_norm not in {"global", "timestep"}:
+            raise ValueError("topology_norm must be 'global' or 'timestep'.")
+        self.topology_norm = topology_norm
         self.visual_projector = RelationProjector(visual_dim, projection_dim)
         self.contrastive_projector = RelationProjector(
             contrastive_dim,
@@ -176,6 +199,10 @@ class TimeAwareVSRA(nn.Module):
                 self.n_timesteps,
                 mode=self.time_mode,
                 strength=self.time_strength,
+                signal_retention=(
+                    self.signal_retention if self.signal_retention.numel() else None
+                ),
+                reliability_floor=self.reliability_floor,
             )
             pair_losses = time_aware_pair_losses(
                 generated_embedding,
@@ -185,6 +212,7 @@ class TimeAwareVSRA(nn.Module):
                 timestep,
                 class_weights,
                 instance_weights,
+                topology_norm=self.topology_norm,
             )
             pair_class = pair_losses["class"]
             pair_instance = pair_losses["instance"]
@@ -216,4 +244,31 @@ class TimeAwareVSRA(nn.Module):
             "instance_weight": instance_weights.mean(),
             "legacy_total": legacy_total,
             "total": total,
+        }
+
+    def timestep_profile(self) -> Dict[str, torch.Tensor]:
+        """Return the configured diffusion reliability profile for logging."""
+        timesteps = torch.arange(self.n_timesteps, device=self.signal_retention.device)
+        class_weights, instance_weights = sample_relation_weights(
+            timesteps,
+            self.n_timesteps,
+            mode=self.time_mode,
+            strength=self.time_strength,
+            signal_retention=(
+                self.signal_retention if self.signal_retention.numel() else None
+            ),
+            reliability_floor=self.reliability_floor,
+        )
+        retention = (
+            self.signal_retention
+            if self.signal_retention.numel()
+            else torch.full_like(class_weights, float("nan"))
+        )
+        snr = retention / (1.0 - retention).clamp_min(1e-12)
+        return {
+            "timestep": timesteps,
+            "signal_retention": retention,
+            "snr": snr,
+            "class_weight": class_weights,
+            "instance_weight": instance_weights,
         }

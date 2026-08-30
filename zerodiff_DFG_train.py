@@ -45,12 +45,16 @@ relation_run_config = {
     'time_pair_weight': opt.rel_time_pair_weight,
     'time_mode': opt.rel_time_mode,
     'time_strength': opt.rel_time_strength,
+    'reliability_floor': opt.rel_reliability_floor,
+    'topology_norm': opt.rel_topology_norm,
 }
 if opt.gamma_rel > 0:
     relation_run_suffix = (
         f"_tvsra-g{opt.gamma_rel:g}"
         f"-{opt.rel_time_mode}"
         f"-s{opt.rel_time_strength:g}"
+        f"-rf{opt.rel_reliability_floor:g}"
+        f"-n{opt.rel_topology_norm}"
         f"-c{opt.rel_class_weight:g}"
         f"-i{opt.rel_instance_weight:g}"
         f"-p{opt.rel_proj_dim}"
@@ -249,6 +253,13 @@ class ZERODIFF(torch.nn.Module):
                 time_pair_weight=opt.rel_time_pair_weight,
                 time_mode=opt.rel_time_mode,
                 time_strength=opt.rel_time_strength,
+                signal_retention=(
+                    self.prior_coefficients.sqrt_alphas_bar[1:self.n_T + 1]
+                    .square()
+                    .detach()
+                ),
+                reliability_floor=opt.rel_reliability_floor,
+                topology_norm=opt.rel_topology_norm,
             ).to(self.device)
             self.optimizerVSRA = optim.Adam(
                 self.time_aware_vsra.parameters(),
@@ -608,6 +619,23 @@ class ZERODIFF(torch.nn.Module):
 zerodiff = ZERODIFF(data, n_T=opt.n_T, betas=(opt.ddpmbeta1, opt.ddpmbeta2), seenclasses=data.seenclasses,
                   unseenclasses=data.unseenclasses, attribute=data.attribute,
                   netR_model_path=opt.netR_model_path, device='cuda')
+if zerodiff.relationship_enabled:
+    profile = zerodiff.time_aware_vsra.timestep_profile()
+    profile_rows = []
+    for index in range(opt.n_T):
+        profile_rows.append(
+            "t=%d signal=%.6f snr=%.6f w_class=%.4f w_instance=%.4f"
+            % (
+                int(profile['timestep'][index]),
+                float(profile['signal_retention'][index]),
+                float(profile['snr'][index]),
+                float(profile['class_weight'][index]),
+                float(profile['instance_weight'][index]),
+            )
+        )
+    profile_record = "Diffusion relation profile: " + "; ".join(profile_rows)
+    print(profile_record)
+    logger.write(profile_record + '\n')
 zerodiff.train()
 
 best_gzsl_acc_V = 0

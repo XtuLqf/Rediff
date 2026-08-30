@@ -12,7 +12,8 @@ embedders, adaptive gates, or relation optimizers.
 - Plotting scripts read `.npz`/`.csv` artifacts and never import a model.
 - Class relations use cross-class sample pairs with the class-shared semantic
   teacher; instance relations use same-class sample pairs with the PaCo teacher.
-  Masking and mask-local normalization exactly match proposed-method training.
+  Masking and per-timestep mask-local normalization exactly match
+  proposed-method training.
 
 The original clean DFG checkpoints do not save `state_dict_E`. When it is absent,
 the diagnostic runtime uses a seeded random latent and records
@@ -53,7 +54,9 @@ python -m diagnostics.export_trajectory \
 
 For every episode, the exporter holds samples, latent variables, attributes,
 contrastive features, and Gaussian noise fixed while evaluating all four exact
-timesteps. It writes `trajectory.npz`, `metrics.csv`, and `metadata.json`.
+timesteps. `metrics.csv` records the actual `alpha_bar[t+1]` signal retention
+and SNR of the ZeroDiff generator input beside both topology trajectories. It
+writes `trajectory.npz`, `metrics.csv`, and `metadata.json`.
 
 ## 2. Plot multi-granularity relational drift
 

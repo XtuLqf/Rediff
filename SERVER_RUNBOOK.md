@@ -159,12 +159,17 @@ python scripts/run_awa2_zerodiff_DFG_train.py \
   --rel_teacher_anchor_weight 1.0 \
   --rel_dist_ratio 1.0 --rel_angle_ratio 2.0 --rel_use_angle \
   --rel_time_pair_weight 1.0 \
-  --rel_time_mode class_up_instance_down \
-  --rel_time_strength 0.5
+  --rel_time_mode diffusion_reliability \
+  --rel_time_strength 0.5 \
+  --rel_reliability_floor 0.5 \
+  --rel_topology_norm timestep
 ```
 
 First run `--rel_time_pair_weight 0` to reproduce the VSRA anchor, then enable
 the proposed value `1`. Values between zero and one form a constant-budget
 interpolation instead of adding both objectives. Use `--gamma_rel 0` as the
 same-code baseline-equivalence control. Set either component weight to zero for
-the class-only and instance-only ablations.
+the class-only and instance-only ablations. Reproduce the exact v1.04 winner
+with `--rel_time_mode fixed --rel_time_strength 0 --rel_topology_norm global`.
+Use `--rel_time_mode class_up_instance_down` only to reproduce the rejected
+linear schedule.

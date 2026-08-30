@@ -1,7 +1,10 @@
 import torch
 
 from diagnostics.relation_metrics import class_relation_loss, instance_relation_loss
-from relation.timestep_schedule import sample_relation_group_timesteps
+from relation.timestep_schedule import (
+    sample_relation_group_timesteps,
+    sample_relation_weights,
+)
 from relation.topology import time_aware_pair_losses
 from relation.vsra import TimeAwareVSRA
 
@@ -35,6 +38,7 @@ def test_time_aware_pairs_exclude_cross_timestep_relations():
         timesteps,
         weights,
         weights,
+        topology_norm="timestep",
     )
 
     assert losses["class_pairs"].item() == 0
@@ -66,6 +70,78 @@ def test_diagnostics_match_training_topology_definition():
         losses["instance"],
         instance_relation_loss(student, contrastive, labels),
     )
+
+
+def test_each_timestep_topology_is_normalized_independently():
+    student = torch.tensor(
+        [[0.0], [1.0], [3.0], [4.0], [100.0], [110.0], [130.0], [140.0]]
+    )
+    teacher = torch.tensor(
+        [[0.0], [1.0], [3.0], [4.0], [10.0], [11.0], [13.0], [14.0]]
+    )
+    labels = torch.tensor([0, 0, 1, 1, 2, 2, 3, 3])
+    timesteps = torch.tensor([0, 0, 0, 0, 1, 1, 1, 1])
+    weights = torch.ones(8)
+
+    losses = time_aware_pair_losses(
+        student,
+        teacher,
+        teacher,
+        labels,
+        timesteps,
+        weights,
+        weights,
+        topology_norm="timestep",
+    )
+
+    assert torch.allclose(losses["class"], torch.tensor(0.0), atol=1e-6)
+    assert torch.allclose(losses["instance"], torch.tensor(0.0), atol=1e-6)
+
+    global_losses = time_aware_pair_losses(
+        student,
+        teacher,
+        teacher,
+        labels,
+        timesteps,
+        weights,
+        weights,
+        topology_norm="global",
+    )
+    assert global_losses["class"].item() > 0.0
+    assert global_losses["instance"].item() > 0.0
+
+
+def test_diffusion_reliability_decays_without_high_noise_amplification():
+    timesteps = torch.arange(4)
+    signal_retention = torch.tensor([0.64, 0.16, 0.04, 0.01])
+
+    class_weights, instance_weights = sample_relation_weights(
+        timesteps,
+        n_timesteps=4,
+        mode="diffusion_reliability",
+        strength=0.5,
+        signal_retention=signal_retention,
+        reliability_floor=0.5,
+    )
+
+    assert torch.all(class_weights[:-1] >= class_weights[1:])
+    assert torch.all(instance_weights[:-1] >= instance_weights[1:])
+    assert torch.all(class_weights >= instance_weights)
+    assert torch.all(class_weights <= 1.0)
+    assert torch.all(instance_weights <= 1.0)
+    assert torch.all(class_weights >= 0.5)
+    assert torch.all(instance_weights >= 0.5)
+
+    fixed_class, fixed_instance = sample_relation_weights(
+        timesteps,
+        n_timesteps=4,
+        mode="diffusion_reliability",
+        strength=0.0,
+        signal_retention=signal_retention,
+        reliability_floor=0.5,
+    )
+    assert torch.equal(fixed_class, torch.ones(4))
+    assert torch.equal(fixed_instance, torch.ones(4))
 
 
 def test_static_and_time_aware_losses_use_a_convex_budget():

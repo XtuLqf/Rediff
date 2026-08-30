@@ -119,6 +119,7 @@ def main() -> None:
             episode.attributes,
             episode.contrastive,
             episode.labels,
+            runtime.relation_signal_retention,
         )
         for row in rows:
             row.update(
@@ -167,6 +168,11 @@ def main() -> None:
         "noise_coupling": "shared_epsilon_closed_form_marginals",
         "evaluation_unit": "balanced_episode_paired_across_timesteps",
         "timestep_order": list(range(options.n_T)),
+        "relation_signal_definition": "alpha_bar[t+1] of the generator input x_{t+1}",
+        "relation_signal_retention": [
+            float(value)
+            for value in runtime.relation_signal_retention.detach().cpu()
+        ],
         "vsra_used": False,
         "relation_projector_used": False,
         "optimizer_steps": 0,
