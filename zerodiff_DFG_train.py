@@ -1,6 +1,9 @@
 # author: ZihanYe
 # ZeroDiff (ICLR25)
 from __future__ import print_function
+import faulthandler
+import gc
+import math
 import random
 import torch
 import torch.autograd as autograd
@@ -16,10 +19,12 @@ import numpy as np
 import os
 from relation import TimeAwareVSRA, sample_relation_group_timesteps
 
+faulthandler.enable(all_threads=True)
+
 class Logger(object):
-    def __init__(self, filename):
+    def __init__(self, filename, append=False):
         self.filename = filename
-        f = open(self.filename + '.log', "w")
+        f = open(self.filename + '.log', "a" if append else "w")
         f.close()
 
     def write(self, message):
@@ -66,7 +71,7 @@ else:
 logger_name = "./log/%s/train_zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_f:%.1f_num:%s" % (
     opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
     str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.factor_dist, opt.syn_num) + relation_run_suffix
-logger = Logger(logger_name)
+logger = Logger(logger_name, append=bool(opt.resume_training))
 model_save_name = "./out/%s/zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_f:%.1f_num:%d" % (
     opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
     str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.factor_dist, opt.syn_num) + relation_run_suffix
@@ -83,7 +88,8 @@ random.seed(opt.manualSeed)
 torch.manual_seed(opt.manualSeed)
 if opt.cuda:
     torch.cuda.manual_seed_all(opt.manualSeed)
-cudnn.benchmark = True
+cudnn.benchmark = False
+cudnn.deterministic = True
 if torch.cuda.is_available() and not opt.cuda:
     print("WARNING: You have a CUDA device, so you should probably run with --cuda")
 # load data
@@ -152,7 +158,8 @@ def sampleTestSeen():
 
 def WeightedL14att(pred, gt):
     wt = (pred - gt).pow(2)
-    wt /= wt.sum(1).sqrt().unsqueeze(1).expand(wt.size(0), wt.size(1))
+    scale = wt.sum(1).sqrt().clamp_min(1e-12)
+    wt /= scale.unsqueeze(1).expand(wt.size(0), wt.size(1))
     loss = wt * (pred - gt).abs()
     return loss.sum() / loss.size(0)
 
@@ -194,6 +201,90 @@ def save_zerodiff(zerodiff, save_name, post):
             'config': relation_run_config,
         }
     torch.save(checkpoint, save_name + post + '.tar')
+
+
+BEST_STATE_NAMES = (
+    'best_gzsl_acc_V', 'best_acc_seen_V', 'best_acc_unseen_V', 'best_zsl_acc_V',
+    'best_gzsl_acc_VS', 'best_acc_seen_VS', 'best_acc_unseen_VS', 'best_zsl_acc_VS',
+    'best_gzsl_acc_C', 'best_acc_seen_C', 'best_acc_unseen_C', 'best_zsl_acc_C',
+    'best_gzsl_acc_VC', 'best_acc_seen_VC', 'best_acc_unseen_VC', 'best_zsl_acc_VC',
+    'best_gzsl_acc_VCS', 'best_acc_seen_VCS', 'best_acc_unseen_VCS', 'best_zsl_acc_VCS',
+    'best_seen_acc_V',
+    'best_acc_seen_list_V', 'best_acc_unseen_list_V', 'best_acc_zsl_list_V',
+    'best_acc_seen_list_C', 'best_acc_unseen_list_C', 'best_acc_zsl_list_C',
+    'best_acc_seen_list_VC', 'best_acc_unseen_list_VC', 'best_acc_zsl_list_VC',
+    'best_acc_seen_list_VS', 'best_acc_unseen_list_VS', 'best_acc_zsl_list_VS',
+    'best_acc_seen_list_VCS', 'best_acc_unseen_list_VCS', 'best_acc_zsl_list_VCS',
+)
+
+
+def save_training_state(zerodiff, save_name, epoch):
+    """Atomically save enough state to resume after a native process failure."""
+    checkpoint = {
+        'next_epoch': epoch + 1,
+        'relation_config': relation_run_config,
+        'state_dict_E': zerodiff.netE.state_dict(),
+        'state_dict_G': zerodiff.netG.state_dict(),
+        'state_dict_Dec': zerodiff.netDec.state_dict(),
+        'state_dict_D_x0': zerodiff.netD_x0.state_dict(),
+        'state_dict_D_xt': zerodiff.netD_xt.state_dict(),
+        'state_dict_D_xc': zerodiff.netD_xc.state_dict(),
+        'optimizer_E': zerodiff.optimizerE.state_dict(),
+        'optimizer_G': zerodiff.optimizerG.state_dict(),
+        'optimizer_Dec': zerodiff.optimizerDec.state_dict(),
+        'optimizer_D_x0': zerodiff.optimizerD_x0.state_dict(),
+        'optimizer_D_xt': zerodiff.optimizerD_xt.state_dict(),
+        'optimizer_D_xc': zerodiff.optimizerD_xc.state_dict(),
+        'lambda1': zerodiff.lambda1,
+        'best_state': {name: globals()[name] for name in BEST_STATE_NAMES},
+        'python_rng_state': random.getstate(),
+        'numpy_rng_state': np.random.get_state(),
+        'torch_rng_state': torch.get_rng_state(),
+        'cuda_rng_state': torch.cuda.get_rng_state_all() if opt.cuda else None,
+    }
+    if zerodiff.relationship_enabled:
+        checkpoint['state_dict_VSRA'] = zerodiff.time_aware_vsra.state_dict()
+        checkpoint['optimizer_VSRA'] = zerodiff.optimizerVSRA.state_dict()
+    checkpoint_path = save_name + '_training_last.tar'
+    temporary_path = checkpoint_path + '.tmp'
+    torch.save(checkpoint, temporary_path)
+    os.replace(temporary_path, checkpoint_path)
+    return checkpoint_path
+
+
+def load_training_state(zerodiff, checkpoint_path):
+    checkpoint = torch.load(
+        checkpoint_path,
+        map_location=zerodiff.device,
+        weights_only=False,
+    )
+    if checkpoint.get('relation_config') != relation_run_config:
+        raise ValueError(
+            "Resume checkpoint relation configuration does not match this run."
+        )
+    zerodiff.netE.load_state_dict(checkpoint['state_dict_E'])
+    zerodiff.netG.load_state_dict(checkpoint['state_dict_G'])
+    zerodiff.netDec.load_state_dict(checkpoint['state_dict_Dec'])
+    zerodiff.netD_x0.load_state_dict(checkpoint['state_dict_D_x0'])
+    zerodiff.netD_xt.load_state_dict(checkpoint['state_dict_D_xt'])
+    zerodiff.netD_xc.load_state_dict(checkpoint['state_dict_D_xc'])
+    zerodiff.optimizerE.load_state_dict(checkpoint['optimizer_E'])
+    zerodiff.optimizerG.load_state_dict(checkpoint['optimizer_G'])
+    zerodiff.optimizerDec.load_state_dict(checkpoint['optimizer_Dec'])
+    zerodiff.optimizerD_x0.load_state_dict(checkpoint['optimizer_D_x0'])
+    zerodiff.optimizerD_xt.load_state_dict(checkpoint['optimizer_D_xt'])
+    zerodiff.optimizerD_xc.load_state_dict(checkpoint['optimizer_D_xc'])
+    zerodiff.lambda1 = checkpoint['lambda1']
+    if zerodiff.relationship_enabled:
+        zerodiff.time_aware_vsra.load_state_dict(checkpoint['state_dict_VSRA'])
+        zerodiff.optimizerVSRA.load_state_dict(checkpoint['optimizer_VSRA'])
+    globals().update(checkpoint.get('best_state', {}))
+    random.setstate(checkpoint['python_rng_state'])
+    np.random.set_state(checkpoint['numpy_rng_state'])
+    torch.set_rng_state(checkpoint['torch_rng_state'].cpu())
+    if opt.cuda and checkpoint.get('cuda_rng_state') is not None:
+        torch.cuda.set_rng_state_all(checkpoint['cuda_rng_state'])
+    return int(checkpoint['next_epoch'])
 
 
 class ZERODIFF(torch.nn.Module):
@@ -439,15 +530,15 @@ class ZERODIFF(torch.nn.Module):
             criticD_test_real_xt = self.netD_xt(test_seen_x_t_real, test_seen_x_tp1_real, test_seen_att_0_real, test_seen_con_0_real, _ts_feat)
             criticD_test_real_xc = self.netD_xc(test_seen_x_0_real, test_seen_con_0_real)
 
-        self.interval_recorder_sum['criticD_train_real_x0'] += criticD_real_x0.mean()
-        self.interval_recorder_sum['criticD_train_real_xt'] += criticD_real_xt.mean()
-        self.interval_recorder_sum['criticD_train_real_xc'] += criticD_real_xc.mean()
-        self.interval_recorder_sum['criticD_train_fake_x0'] += criticD_fake_x0.mean()
-        self.interval_recorder_sum['criticD_train_fake_xt'] += criticD_fake_xt.mean()
-        self.interval_recorder_sum['criticD_train_fake_xc'] += criticD_fake_xc.mean()
-        self.interval_recorder_sum['criticD_test_real_x0'] += criticD_test_real_x0.mean()
-        self.interval_recorder_sum['criticD_test_real_xt'] += criticD_test_real_xt.mean()
-        self.interval_recorder_sum['criticD_test_real_xc'] += criticD_test_real_xc.mean()
+        self.interval_recorder_sum['criticD_train_real_x0'] += criticD_real_x0.detach().mean().item()
+        self.interval_recorder_sum['criticD_train_real_xt'] += criticD_real_xt.detach().mean().item()
+        self.interval_recorder_sum['criticD_train_real_xc'] += criticD_real_xc.detach().mean().item()
+        self.interval_recorder_sum['criticD_train_fake_x0'] += criticD_fake_x0.detach().mean().item()
+        self.interval_recorder_sum['criticD_train_fake_xt'] += criticD_fake_xt.detach().mean().item()
+        self.interval_recorder_sum['criticD_train_fake_xc'] += criticD_fake_xc.detach().mean().item()
+        self.interval_recorder_sum['criticD_test_real_x0'] += criticD_test_real_x0.detach().mean().item()
+        self.interval_recorder_sum['criticD_test_real_xt'] += criticD_test_real_xt.detach().mean().item()
+        self.interval_recorder_sum['criticD_test_real_xc'] += criticD_test_real_xc.detach().mean().item()
 
         return D_cost, Wasserstein_D, gp_sum, distill_loss
 
@@ -673,31 +764,55 @@ best_acc_seen_list_VCS, best_acc_unseen_list_VCS, best_acc_zsl_list_VCS = [], []
 
 
 n_iter = len(range(0, data.ntrain, opt.batch_size))
-for epoch in range(0, opt.nepoch):
+start_epoch = 0
+if opt.resume_training:
+    start_epoch = load_training_state(zerodiff, opt.resume_training)
+    resume_record = 'Resumed full training state from %s at epoch %d' % (
+        opt.resume_training,
+        start_epoch,
+    )
+    print(resume_record)
+    logger.write(resume_record + '\n')
+
+for epoch in range(start_epoch, opt.nepoch):
     for i in range(0, data.ntrain, opt.batch_size):
         D_cost, Wasserstein_D, distill_loss, G_cost, vae_loss_seen = zerodiff()
 
+    epoch_losses = {
+        'Loss_D': D_cost.detach().item(),
+        'Wasserstein_dist': Wasserstein_D.detach().item(),
+        'distill_loss': distill_loss.detach().item(),
+        'Loss_G': G_cost.detach().item(),
+        'vae_loss_seen': vae_loss_seen.detach().item(),
+    }
+    nonfinite = [name for name, value in epoch_losses.items() if not math.isfinite(value)]
+    if nonfinite:
+        raise FloatingPointError(
+            'Non-finite training values at epoch %d: %s'
+            % (epoch, ', '.join(nonfinite))
+        )
+
     log_record = '[%d/%d] Loss_D: %.4f, Wasserstein_dist:%.4f, distill_loss:%.4f' % (
-        epoch, opt.nepoch, D_cost.item(), Wasserstein_D.item(), distill_loss.item())
+        epoch, opt.nepoch, epoch_losses['Loss_D'], epoch_losses['Wasserstein_dist'], epoch_losses['distill_loss'])
     print(log_record)
     logger.write(log_record + '\n')
 
     log_record = '[%d/%d] Loss_G: %.4f, vae_loss_seen:%.4f' % (
-        epoch, opt.nepoch, G_cost.item(), vae_loss_seen.item())
+        epoch, opt.nepoch, epoch_losses['Loss_G'], epoch_losses['vae_loss_seen'])
     print(log_record)
     logger.write(log_record + '\n')
 
-    criticD_train_real_x0 = zerodiff.interval_recorder_sum['criticD_train_real_x0'].item() / n_iter
-    criticD_train_real_xt = zerodiff.interval_recorder_sum['criticD_train_real_xt'].item() / n_iter
-    criticD_train_real_xc = zerodiff.interval_recorder_sum['criticD_train_real_xc'].item() / n_iter
+    criticD_train_real_x0 = zerodiff.interval_recorder_sum['criticD_train_real_x0'] / n_iter
+    criticD_train_real_xt = zerodiff.interval_recorder_sum['criticD_train_real_xt'] / n_iter
+    criticD_train_real_xc = zerodiff.interval_recorder_sum['criticD_train_real_xc'] / n_iter
 
-    criticD_test_real_x0 = zerodiff.interval_recorder_sum['criticD_test_real_x0'].item() / n_iter
-    criticD_test_real_xt = zerodiff.interval_recorder_sum['criticD_test_real_xt'].item() / n_iter
-    criticD_test_real_xc = zerodiff.interval_recorder_sum['criticD_test_real_xc'].item() / n_iter
+    criticD_test_real_x0 = zerodiff.interval_recorder_sum['criticD_test_real_x0'] / n_iter
+    criticD_test_real_xt = zerodiff.interval_recorder_sum['criticD_test_real_xt'] / n_iter
+    criticD_test_real_xc = zerodiff.interval_recorder_sum['criticD_test_real_xc'] / n_iter
 
-    criticD_train_fake_x0 = zerodiff.interval_recorder_sum['criticD_train_fake_x0'].item() / n_iter
-    criticD_train_fake_xt = zerodiff.interval_recorder_sum['criticD_train_fake_xt'].item() / n_iter
-    criticD_train_fake_xc = zerodiff.interval_recorder_sum['criticD_train_fake_xc'].item() / n_iter
+    criticD_train_fake_x0 = zerodiff.interval_recorder_sum['criticD_train_fake_x0'] / n_iter
+    criticD_train_fake_xt = zerodiff.interval_recorder_sum['criticD_train_fake_xt'] / n_iter
+    criticD_train_fake_xc = zerodiff.interval_recorder_sum['criticD_train_fake_xc'] / n_iter
     if zerodiff.relationship_enabled:
         relation_epoch_stats = {
             key: zerodiff.interval_recorder_sum[key] / n_iter
@@ -1185,6 +1300,32 @@ for epoch in range(0, opt.nepoch):
         log_record = 'best seen (V): %.4f' % (best_seen_acc_V.item())
         print(log_record)
         logger.write(log_record + '\n')
+
+        # Classifier instances retain materialized V/S/C feature matrices and
+        # CUDA optimizers. Release every evaluation artifact before returning
+        # to generator training to prevent host/GPU memory growth across epochs.
+        for evaluation_name in (
+            'seen_cls_V',
+            'gzsl_cls_V', 'gzsl_cls_VS', 'gzsl_cls_C', 'gzsl_cls_VC', 'gzsl_cls_VCS',
+            'zsl_cls_V', 'zsl_cls_VS', 'zsl_cls_C', 'zsl_cls_VC', 'zsl_cls_VCS',
+            'train_X', 'train_C', 'train_Y', 'train_X_pro', 'train_C_pro', 'train_Y_pro',
+            'syn_feature', 'syn_con', 'syn_label',
+            'syn_feature_pro', 'syn_con_pro', 'syn_label_pro',
+            'syn_feature_seen', 'syn_con_seen', 'syn_label_seen',
+        ):
+            globals().pop(evaluation_name, None)
+        gc.collect()
+        if opt.cuda:
+            torch.cuda.empty_cache()
+
+    if (
+        opt.training_checkpoint_interval > 0
+        and epoch % opt.training_checkpoint_interval == 0
+    ):
+        checkpoint_path = save_training_state(zerodiff, model_save_name, epoch)
+        checkpoint_record = 'Saved recoverable training state: ' + checkpoint_path
+        print(checkpoint_record)
+        logger.write(checkpoint_record + '\n')
 
 
 

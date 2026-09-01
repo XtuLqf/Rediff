@@ -16,17 +16,20 @@ class CLASSIFIER:
     def __init__(self, _train_X, _train_Y, data_loader, _nclass, _cuda, _lr=0.001, _beta1=0.5, _nepoch=20,
                  _batch_size=100, cls_mode="GZSL", useV=True, useS=False, useC=False, netDec=None, dec_size=4096,
                  dec_hidden_size=4096, _train_C=None, con_size=2048):
-        self.train_X = _train_X.clone()
-        self.train_Y = _train_Y.clone()
+        # compute_dec_out always materializes the classifier input below. Avoid
+        # an additional full copy here: AWA2 VCS evaluation can otherwise keep
+        # several gigabytes of redundant synthetic features alive.
+        self.train_X = _train_X
+        self.train_Y = _train_Y
         if _train_C is not None:
-            self.train_C = _train_C.clone()
+            self.train_C = _train_C
         else:
             self.train_C = None
-        self.test_seen_feature = data_loader.test_seen_feature.clone()
-        self.test_seen_con = data_loader.test_seen_paco.clone()
+        self.test_seen_feature = data_loader.test_seen_feature
+        self.test_seen_con = data_loader.test_seen_paco
         self.test_seen_label = data_loader.test_seen_label
-        self.test_unseen_feature = data_loader.test_unseen_feature.clone()
-        self.test_unseen_con = data_loader.test_unseen_paco.clone()
+        self.test_unseen_feature = data_loader.test_unseen_feature
+        self.test_unseen_con = data_loader.test_unseen_paco
         self.test_unseen_label = data_loader.test_unseen_label
         self.seenclasses = data_loader.seenclasses
         self.unseenclasses = data_loader.unseenclasses
@@ -52,6 +55,9 @@ class CLASSIFIER:
         self.train_X = self.compute_dec_out(self.train_X, self.input_dim, test_C=self.train_C)
         self.test_unseen_feature = self.compute_dec_out(self.test_unseen_feature, self.input_dim, test_C=self.test_unseen_con)
         self.test_seen_feature = self.compute_dec_out(self.test_seen_feature, self.input_dim, test_C=self.test_seen_con)
+        self.train_C = None
+        self.test_unseen_con = None
+        self.test_seen_con = None
 
         self.model = LINEAR_LOGSOFTMAX_CLASSIFIER(self.input_dim, self.nclass)
         self.model.apply(util.weights_init)

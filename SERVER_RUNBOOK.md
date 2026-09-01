@@ -173,3 +173,25 @@ the class-only and instance-only ablations. Reproduce the exact v1.04 winner
 with `--rel_time_mode fixed --rel_time_strength 0 --rel_topology_norm global`.
 Use `--rel_time_mode class_up_instance_down` only to reproduce the rejected
 linear schedule.
+
+## Recover from an interrupted DFG run
+
+DFG training now atomically overwrites a full recovery checkpoint every five
+epochs. Its path ends in `_training_last.tar` and is printed after saving. The
+checkpoint contains all trainable modules, optimizers, adaptive gradient
+penalty, RNG states, relation configuration, and best-score bookkeeping.
+
+Resume with the identical launcher arguments plus the printed path, for
+example:
+
+```bash
+python scripts/run_awa2_zerodiff_DFG_train.py \
+  --rel_time_strength 0 \
+  --rel_topology_norm timestep \
+  --resume_training 'out/AWA2/<matching-run>_training_last.tar'
+```
+
+Do not pass a `gzsl_*.tar` or `zsl_*.tar` model-selection checkpoint to
+`--resume_training`; those files intentionally do not contain optimizer state.
+Set `--training_checkpoint_interval 0` only when recovery checkpoints are not
+needed.

@@ -87,6 +87,10 @@ parser.add_argument("--eval_interval", type=int, default=1)
 parser.add_argument('--ddpmbeta1', type=float, default=1e-1)
 parser.add_argument('--ddpmbeta2', type=float, default=20)
 parser.add_argument("--netR_model_path", default=None)
+parser.add_argument("--resume_training", default=None,
+                    help="full DFG training-state checkpoint to resume")
+parser.add_argument("--training_checkpoint_interval", type=int, default=5,
+                    help="save recoverable training state every N epochs; 0 disables")
 
 opt = parser.parse_args()
 opt.lambda2 = opt.lambda1
@@ -113,4 +117,6 @@ if not 0.0 <= opt.rel_reliability_floor <= 1.0:
     parser.error("rel_reliability_floor must be in [0, 1]")
 if not 0.0 <= opt.rel_time_pair_weight <= 1.0:
     parser.error("rel_time_pair_weight must be in [0, 1]")
+if opt.training_checkpoint_interval < 0:
+    parser.error("training_checkpoint_interval must be non-negative")
 
