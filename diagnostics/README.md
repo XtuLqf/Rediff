@@ -1,108 +1,69 @@
-# Clean ZeroDiff relational diagnostics
+# ZeroDiff baseline relation diagnosis
 
-These tools diagnose the unmodified ZeroDiff DFG at source commit `d9da5ab`.
-They deliberately do not import or use VSRA, relation projectors, C-teacher
-embedders, adaptive gates, or relation optimizers.
+This package measures the problem targeted by time-aware multi-granularity
+relation consistency without updating or extending the baseline model.
 
-## Isolation guarantees
+The diagnosis asks three questions at every diffusion timestep:
 
-- `checkpoint_guard.py` rejects checkpoints containing known relation/VSRA state.
-- No diagnostic script calls `optimizer.step()` or writes a checkpoint.
-- Model-dependent scripts write only under `out/diagnostics/baseline/` by default.
-- Plotting scripts read `.npz`/`.csv` artifacts and never import a model.
-- Class relations use cross-class sample pairs with the class-shared semantic
-  teacher; instance relations use same-class sample pairs with the PaCo teacher.
-  Masking and per-timestep mask-local normalization exactly match
-  proposed-method training.
+1. How well does generated visual space preserve cross-class semantic topology?
+2. How well does it preserve within-class PaCo instance topology?
+3. Do the two relation objectives conflict or dominate one another in generator
+   gradient space?
 
-The original clean DFG checkpoints do not save `state_dict_E`. When it is absent,
-the diagnostic runtime uses a seeded random latent and records
-`latent_source=seeded_random`. This exactly matches the latent source used by
-ZeroDiff feature synthesis, but the limitation must be disclosed when interpreting
-the counterfactual training-gradient probe.
+Class relations use different-class sample pairs and semantic attributes.
+Instance relations use same-class, different-instance pairs and PaCo features.
+Each topology is normalized by its own positive mean, exactly as in the proposed
+training loss. Samples, latent variables, and Gaussian noise are fixed across
+timesteps inside an episode so that timestep comparisons are paired.
 
-## Target Linux environment
+## Run
 
-The code is compatible with Python 3.10, PyTorch 2.9.1+cu130, torchvision
-0.24.1+cu130, RTX 5090, and NVIDIA driver 580.126.09. Plotting additionally
-requires Matplotlib, which is not included in the base experiment dependencies:
+Run the complete small experiment directly from the repository root:
 
 ```bash
-pip install matplotlib==3.7.5
-```
-
-Both plotting commands accept one or more metrics CSV files after `--metrics`.
-The default is 10 balanced 8-way/8-shot episodes. All timesteps reuse the same
-samples and noise within an episode, so timestep differences are directly
-comparable. The diagnostic seed only controls episode sampling; it is not a new
-model-training seed.
-
-## 1. Export controlled timestep trajectories
-
-Run from the repository root in the same PyTorch environment used for ZeroDiff:
-
-```bash
-python -m diagnostics.export_trajectory \
+python -m diagnostics.run_baseline \
   --dataset AWA2 \
   --dataroot Dataset \
   --checkpoint out/AWA2/<clean-dfg-checkpoint>.tar \
   --ways 8 \
   --shots 8 \
   --episodes 10 \
-  --device cuda
+  --seed 9182 \
+  --device cuda:0
 ```
 
-For every episode, the exporter holds samples, latent variables, attributes,
-contrastive features, and Gaussian noise fixed while evaluating all four exact
-timesteps. `metrics.csv` records the actual `alpha_bar[t+1]` signal retention
-and SNR of the ZeroDiff generator input beside both topology trajectories. It
-writes `trajectory.npz`, `metrics.csv`, and `metadata.json`.
+There is no smoke mode and no separate export/plot sequence. One invocation
+runs inference, computes relation gradients, writes metrics, and refreshes the
+figure.
 
-## 2. Plot multi-granularity relational drift
+The default output is deliberately flat:
 
-```bash
-python -m diagnostics.plot_relation_drift \
-  --trajectory out/diagnostics/baseline/AWA2/<hash>/trajectory_seed_20260814/trajectory.npz \
-  --metrics out/diagnostics/baseline/AWA2/<hash>/trajectory_seed_20260814/metrics.csv \
-  --output-dir out/diagnostics/baseline/AWA2/<hash>/figures
+```text
+out/diagnostics/AWA2/
+├── metrics_seed_9182.csv
+└── diagnosis.png
 ```
 
-This produces `relation_heatmaps.png` and a three-panel
-`topology_dynamics.png`. The latter shows topology fidelity, alignment error,
-and class/instance temporal stability as episode mean +/- standard deviation.
-Existing trajectory archives can be upgraded without model inference using
-`python -m diagnostics.recompute_trajectory_metrics`; see `SERVER_RUNBOOK.md`.
+Running another seed adds one CSV and rebuilds `diagnosis.png` from all
+`metrics_seed_*.csv` files belonging to the same dataset, checkpoint, and
+episode configuration. Running the same seed again replaces that seed's CSV.
+The CSV contains checkpoint/code provenance and run configuration, so no
+separate metadata file is written.
 
-## 3. Probe gradient interference without training
+`diagnosis.png` contains topology alignment error, topology rank fidelity, and
+cross-granularity gradient coordination. The x-axis reports both the ZeroDiff
+generator timestep and the actual `alpha_bar[t+1]` signal retention.
 
-```bash
-python -m diagnostics.gradient_probe \
-  --dataset AWA2 \
-  --dataroot Dataset \
-  --checkpoint out/AWA2/<clean-dfg-checkpoint>.tar \
-  --ways 8 \
-  --shots 8 \
-  --episodes 10 \
-  --device cuda
-```
+## Baseline isolation and latent source
 
-The probe computes gradients of the existing generator objective and two
-counterfactual relation losses with `torch.autograd.grad`. It performs zero
-optimizer updates. Plot the result with:
+`checkpoint_guard.py` rejects checkpoints containing relation/VSRA state. The
+diagnostic code never calls `optimizer.step()` and never writes a checkpoint.
 
-```bash
-python -m diagnostics.plot_gradient_conflicts \
-  --metrics out/diagnostics/baseline/AWA2/<hash>/gradients_seed_20260814/gradient_metrics.csv \
-  --output out/diagnostics/baseline/AWA2/<hash>/figures/gradient_conflicts.png
-```
+New DFG checkpoints save `state_dict_E`, allowing the diagnostic latent to match
+the encoder-conditioned training path. Older clean checkpoints remain usable;
+when the encoder is absent, the runner prints a warning, uses one seeded random
+latent shared by all timesteps, and records `latent_source=seeded_random` in the
+CSV.
 
-The gradient figure contains raw cosine compatibility, conflict frequency, and
-the opposing gradient magnitude that the counterfactual base-anchor projection
-would remove. The probe still performs no optimizer update.
-
-## Interpretation rules
-
-Treat this as a motivation experiment: first inspect one checkpoint with 10
-episodes. Only expand to more training seeds or datasets if the curves are
-promising enough for the final paper experiment. A single heatmap episode is
-illustrative; the curves summarize all exported episodes.
+The diagnostic seed controls balanced episode sampling and paired random inputs;
+it is not a model-training seed.

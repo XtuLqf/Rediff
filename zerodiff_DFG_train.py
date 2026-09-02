@@ -188,7 +188,8 @@ def generate_syn_feature(zerodiff, classes, attribute, num, progressive=False):
 
 
 def save_zerodiff(zerodiff, save_name, post):
-    checkpoint = {'state_dict_G': zerodiff.netG.state_dict(),
+    checkpoint = {'state_dict_E': zerodiff.netE.state_dict(),
+                  'state_dict_G': zerodiff.netG.state_dict(),
                   'state_dict_Dec': zerodiff.netDec.state_dict(),
                   'state_dict_D_x0': zerodiff.netD_x0.state_dict(),
                   'state_dict_D_xt': zerodiff.netD_xt.state_dict(),

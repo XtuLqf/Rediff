@@ -1,29 +1,19 @@
 # Linux server runbook
 
-## Branch map
+Run all commands from the repository root.
 
-- `codex/relational-drift-diagnostics` is the clean-problem branch. It starts
-  from runnable ZeroDiff commit `d9da5ab` and contains only read-only diagnostic
-  exporters, gradient probes, and offline plotting. Use it to train/select a
-  clean baseline checkpoint and produce the motivation figures.
-- `codex/time-aware-relational-consistency` is the proposed-method branch. It
-  contains the same diagnostics plus a calibrated relation space with
-  diffusion-timestep coordinated semantic and contrastive topology.
-  Use it only after the baseline evidence is fixed.
+## Branch
 
-These branches are currently local until they are pushed. From the development
-machine, publish them once:
+Use the current method branch for both the clean control and the proposed
+method. The diagnostic runner loads only clean ZeroDiff state and rejects a
+checkpoint containing relation/VSRA parameters, so a separate diagnostic branch
+is no longer required.
 
-```bash
-git push -u Rediff codex/relational-drift-diagnostics
-git push -u Rediff codex/time-aware-relational-consistency
-```
-
-Then on the Linux server:
+On the server:
 
 ```bash
 git fetch Rediff
-git switch --track Rediff/codex/relational-drift-diagnostics
+git switch codex/time-aware-relational-consistency
 ```
 
 ## Environment
@@ -36,128 +26,80 @@ pip install torch==2.9.1+cu130 torchvision==0.24.1+cu130 torchaudio==2.9.1+cu130
 pip install scikit-learn==1.3.0 scipy==1.10.0 numpy==1.24.3 pillow==9.4.0 matplotlib==3.7.5
 ```
 
-Verify that the intended environment is active:
+## Train or select a clean baseline
 
 ```bash
-python - <<'PY'
-import torch, numpy, scipy, sklearn, matplotlib
-print("torch:", torch.__version__)
-print("torch CUDA:", torch.version.cuda)
-print("CUDA available:", torch.cuda.is_available())
-print("GPU:", torch.cuda.get_device_name(0))
-print("numpy/scipy/sklearn/matplotlib:", numpy.__version__, scipy.__version__, sklearn.__version__, matplotlib.__version__)
-PY
-```
-
-Run every command below from the repository root. Set the clean DFG checkpoint
-once; it must have been trained without the relation method:
-
-```bash
-git switch codex/relational-drift-diagnostics
 export DATASET=AWA2
 export CLEAN_DFG="out/AWA2/your_clean_zerodiff_DFG_checkpoint.tar"
 ```
 
-If no clean checkpoint exists yet, train DRG first and then the unmodified DFG
-on this diagnostic branch:
+The checkpoint must come from a run without relation consistency. If needed:
 
 ```bash
 python scripts/run_awa2_zerodiff_DRG_train.py
-python scripts/run_awa2_zerodiff_DFG_train.py
+python scripts/run_awa2_zerodiff_DFG_train.py --gamma_rel 0
 find out/AWA2 -maxdepth 1 -type f -name 'zerodiff_DFG*.tar' -print
 ```
 
-`CLEAN_DFG` must point to a DFG checkpoint from the final `find` output, not the
-DRG checkpoint used as DFG conditioning input.
+New checkpoints contain `state_dict_E`, which lets the diagnosis reproduce the
+encoder-conditioned training path. Older clean checkpoints are accepted with a
+visible seeded-random-latent warning. Relation/method checkpoints are rejected.
 
-The checkpoint guard checks both required ZeroDiff module keys and known
-relation/method markers. A method checkpoint fails immediately.
+## Run the baseline diagnosis
 
-## Generate paper-aligned motivation diagnostics
-
-For the current small motivation experiment, use one diagnostic seed and 10
-balanced episodes. This does not mean three model seeds: the checkpoint is still
-the single baseline model you trained.
+There is one complete command and no smoke workflow:
 
 ```bash
-export SEED=9182
-python -m diagnostics.export_trajectory \
+python -m diagnostics.run_baseline \
+  --dataset "$DATASET" \
+  --dataroot Dataset \
+  --checkpoint "$CLEAN_DFG" \
+  --ways 8 \
+  --shots 8 \
+  --episodes 10 \
+  --seed 9182 \
+  --device cuda:0
+```
+
+The command performs the paired timestep passes, relation-gradient measurements,
+CSV export, and plotting. It creates only:
+
+```text
+out/diagnostics/AWA2/
+├── metrics_seed_9182.csv
+└── diagnosis.png
+```
+
+Optional additional diagnostic sampling seeds add one CSV each and are
+automatically included in the refreshed figure:
+
+```bash
+python -m diagnostics.run_baseline \
   --dataset "$DATASET" --dataroot Dataset --checkpoint "$CLEAN_DFG" \
-  --ways 8 --shots 8 --episodes 10 --seed "$SEED" --device cuda:0 \
-  --output-dir "out/diagnostics/topology_v2/$DATASET/seed_$SEED/trajectory"
-
-python -m diagnostics.gradient_probe \
-  --dataset "$DATASET" --dataroot Dataset --checkpoint "$CLEAN_DFG" \
-  --ways 8 --shots 8 --episodes 10 --seed "$SEED" --device cuda:0 \
-  --output-dir "out/diagnostics/topology_v2/$DATASET/seed_$SEED/gradients"
+  --ways 8 --shots 8 --episodes 10 --seed 19182 --device cuda:0
 ```
 
-Render one representative heatmap and the multi-episode curves:
+These are episode-sampling seeds, not independently trained model seeds. Files
+from another checkpoint or episode configuration in the same directory are
+ignored when rebuilding the current figure.
 
-```bash
-FIG_DIR="out/diagnostics/topology_v2/$DATASET/paper_figures"
-
-python -m diagnostics.plot_relation_drift \
-  --trajectory "out/diagnostics/topology_v2/$DATASET/seed_9182/trajectory/trajectory.npz" \
-  --metrics "out/diagnostics/topology_v2/$DATASET/seed_9182/trajectory/metrics.csv" \
-  --episode 0 --output-dir "$FIG_DIR"
-
-python -m diagnostics.plot_gradient_conflicts \
-  --metrics "out/diagnostics/topology_v2/$DATASET/seed_9182/gradients/gradient_metrics.csv" \
-  --output "$FIG_DIR/gradient_conflicts.png"
-```
-
-The old trajectory CSV files do not contain the granularity-specific temporal
-columns, so they cannot be passed directly to the new topology plotter. The
-`topology_v2` directory deliberately keeps a full new run separate.
-
-If trajectories and gradient CSVs were already generated by the previous
-diagnostic version, the expensive model passes do not need to be repeated.
-Upgrade each trajectory CSV on CPU:
-
-```bash
-OLD_DIR="out/diagnostics/baseline/$DATASET/seed_9182/trajectory"
-python -m diagnostics.recompute_trajectory_metrics \
-  --trajectory "$OLD_DIR/trajectory.npz" \
-  --metadata "$OLD_DIR/metadata.json" \
-  --output "$OLD_DIR/metrics_topology_v2.csv"
-```
-
-Use `metrics_topology_v2.csv` in `plot_relation_drift`. Existing
-`gradient_metrics.csv` files can be passed directly to the new gradient plotter:
-the base-anchor opposing-component magnitude is derived exactly from the stored
-gradient cosine, `max(0, -cosine)`.
-
-This creates:
-
-- `relation_heatmaps.png`: shared-scale class/instance topology matrices;
-- `topology_dynamics.png`: fidelity, error, and granularity-specific temporal
-  stability;
-- `gradient_conflicts.png`: raw compatibility, conflict activation frequency,
-  and the magnitude removed by counterfactual base-anchor projection.
-
-The curves use the mean and standard deviation over the 10 episodes. If these
-results support the hypothesis, the final paper experiment can then add more
-training seeds and datasets; that expansion is not required for this first check.
-
-For the final paper experiment, optionally repeat on CUB and SUN with their own
-clean checkpoints.
+The previous `baseline/`, `smoke/`, `topology_v2/`, `trajectory/`, `gradients/`,
+`paper_figures_old/`, and `metrics_topology_v2.csv` layouts are no longer read by
+the code. After confirming the new CSV and figure, old server artifacts can be
+archived or removed manually.
 
 ## Train the proposed method
 
-After the diagnostic curves determine the schedule hypothesis:
-
 ```bash
-git switch --track Rediff/codex/time-aware-relational-consistency  # first use on server
-# Later uses: git switch codex/time-aware-relational-consistency
-
 python scripts/run_awa2_zerodiff_DFG_train.py \
   --gamma_rel 1.0 \
   --rel_class_weight 1.0 \
   --rel_instance_weight 1.0 \
   --rel_proj_dim 512 \
   --rel_teacher_anchor_weight 1.0 \
-  --rel_dist_ratio 1.0 --rel_angle_ratio 2.0 --rel_use_angle \
+  --rel_dist_ratio 1.0 \
+  --rel_angle_ratio 2.0 \
+  --rel_use_angle \
   --rel_time_pair_weight 1.0 \
   --rel_time_mode diffusion_reliability \
   --rel_time_strength 0.5 \
@@ -165,33 +107,40 @@ python scripts/run_awa2_zerodiff_DFG_train.py \
   --rel_topology_norm timestep
 ```
 
-First run `--rel_time_pair_weight 0` to reproduce the VSRA anchor, then enable
-the proposed value `1`. Values between zero and one form a constant-budget
-interpolation instead of adding both objectives. Use `--gamma_rel 0` as the
-same-code baseline-equivalence control. Set either component weight to zero for
-the class-only and instance-only ablations. Reproduce the exact v1.04 winner
-with `--rel_time_mode fixed --rel_time_strength 0 --rel_topology_norm global`.
-Use `--rel_time_mode class_up_instance_down` only to reproduce the rejected
-linear schedule.
+Useful controlled comparisons:
 
-## Recover from an interrupted DFG run
+```bash
+# ZeroDiff-equivalent control
+python scripts/run_awa2_zerodiff_DFG_train.py --gamma_rel 0
 
-DFG training now atomically overwrites a full recovery checkpoint every five
-epochs. Its path ends in `_training_last.tar` and is printed after saving. The
-checkpoint contains all trainable modules, optimizers, adaptive gradient
-penalty, RNG states, relation configuration, and best-score bookkeeping.
+# Static VSRA anchor
+python scripts/run_awa2_zerodiff_DFG_train.py \
+  --gamma_rel 1 --rel_time_pair_weight 0
 
-Resume with the identical launcher arguments plus the printed path, for
-example:
+# Fixed dual topology
+python scripts/run_awa2_zerodiff_DFG_train.py \
+  --gamma_rel 1 --rel_time_pair_weight 1 \
+  --rel_time_mode fixed --rel_time_strength 0 --rel_topology_norm global
+
+# Timestep normalization without reliability gating
+python scripts/run_awa2_zerodiff_DFG_train.py \
+  --gamma_rel 1 --rel_time_pair_weight 1 \
+  --rel_time_strength 0 --rel_topology_norm timestep
+```
+
+Use the same DRG checkpoint and training seed for controlled comparisons.
+
+## Resume interrupted DFG training
+
+DFG training atomically overwrites a recoverable checkpoint at the configured
+interval. Its name ends in `_training_last.tar`.
+
+Resume using the same launcher arguments plus:
 
 ```bash
 python scripts/run_awa2_zerodiff_DFG_train.py \
-  --rel_time_strength 0 \
-  --rel_topology_norm timestep \
   --resume_training 'out/AWA2/<matching-run>_training_last.tar'
 ```
 
 Do not pass a `gzsl_*.tar` or `zsl_*.tar` model-selection checkpoint to
-`--resume_training`; those files intentionally do not contain optimizer state.
-Set `--training_checkpoint_interval 0` only when recovery checkpoints are not
-needed.
+`--resume_training`; those files intentionally exclude optimizer state.
