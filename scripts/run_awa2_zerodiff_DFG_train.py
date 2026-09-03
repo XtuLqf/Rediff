@@ -30,7 +30,7 @@ if NETR_MODEL is None:
 
 env = os.environ.copy()
 env['OMP_NUM_THREADS'] = '4'
-env.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
+env.setdefault('PYTORCH_ALLOC_CONF', 'expandable_segments:True')
 
 command = [
 	sys.executable,

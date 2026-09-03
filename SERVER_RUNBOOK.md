@@ -135,6 +135,11 @@ Use the same DRG checkpoint and training seed for controlled comparisons.
 DFG training atomically overwrites a recoverable checkpoint at the configured
 interval. Its name ends in `_training_last.tar`.
 
+Current checkpoints store the RNG state only for the CUDA device used by the
+model. The loader also accepts the per-visible-GPU RNG list written by v1.06 and
+converts its selected state back to the CPU ByteTensor required by PyTorch, so
+existing v1.06 recovery checkpoints remain usable.
+
 Resume using the same launcher arguments plus:
 
 ```bash

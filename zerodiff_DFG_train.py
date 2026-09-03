@@ -241,7 +241,9 @@ def save_training_state(zerodiff, save_name, epoch):
         'python_rng_state': random.getstate(),
         'numpy_rng_state': np.random.get_state(),
         'torch_rng_state': torch.get_rng_state(),
-        'cuda_rng_state': torch.cuda.get_rng_state_all() if opt.cuda else None,
+        'cuda_rng_state': (
+            torch.cuda.get_rng_state(zerodiff.device) if opt.cuda else None
+        ),
     }
     if zerodiff.relationship_enabled:
         checkpoint['state_dict_VSRA'] = zerodiff.time_aware_vsra.state_dict()
@@ -283,8 +285,18 @@ def load_training_state(zerodiff, checkpoint_path):
     random.setstate(checkpoint['python_rng_state'])
     np.random.set_state(checkpoint['numpy_rng_state'])
     torch.set_rng_state(checkpoint['torch_rng_state'].cpu())
-    if opt.cuda and checkpoint.get('cuda_rng_state') is not None:
-        torch.cuda.set_rng_state_all(checkpoint['cuda_rng_state'])
+    cuda_rng_state = checkpoint.get('cuda_rng_state')
+    if opt.cuda and cuda_rng_state is not None:
+        # v1.06 checkpoints stored one state per visible GPU. Loading with
+        # map_location='cuda' also moves these ByteTensors to CUDA, while
+        # torch.cuda.set_rng_state requires a CPU ByteTensor.
+        if isinstance(cuda_rng_state, (list, tuple)):
+            if not cuda_rng_state:
+                raise ValueError('Checkpoint contains an empty CUDA RNG state list.')
+            device_index = torch.cuda.current_device()
+            state_index = device_index if device_index < len(cuda_rng_state) else 0
+            cuda_rng_state = cuda_rng_state[state_index]
+        torch.cuda.set_rng_state(cuda_rng_state.cpu(), device=zerodiff.device)
     return int(checkpoint['next_epoch'])
 
 

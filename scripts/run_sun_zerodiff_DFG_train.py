@@ -38,7 +38,7 @@ else:
 
 env = os.environ.copy()
 env['OMP_NUM_THREADS'] = '3'
-env.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
+env.setdefault('PYTORCH_ALLOC_CONF', 'expandable_segments:True')
 
 command = [
 	sys.executable,
