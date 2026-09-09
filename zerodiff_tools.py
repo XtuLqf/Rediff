@@ -72,7 +72,7 @@ def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):
         if dim % 2:
             embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
     else:
-        embedding = repeat(timesteps, 'b -> b d', d=dim)
+        embedding = timesteps[:, None].repeat(1, dim)
     return embedding
 
 class TimeEmbedFC(nn.Module):
@@ -377,6 +377,8 @@ def ddpmgan_sigma_schedule(beta1, beta2, n_timestep, device, use_linear_betas):
         betas = torch.cat((first[None], betas))[:-1]
         sigmas = betas ** 0.5
         sqrt_alphas = torch.sqrt(1 - betas)
+        # Cumulative noise variance; retain the tiny initial beta in float32.
+        var = -torch.expm1(torch.cumsum(torch.log1p(-betas), dim=0))
     else:
         eps_small = 1e-3
         t = np.arange(0, n_timestep + 1, dtype=np.float32)

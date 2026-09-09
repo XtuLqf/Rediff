@@ -21,10 +21,10 @@ def data_transform_fun(name, size=224):
             transforms.RandomHorizontalFlip(0.5)
         ])
     elif 'resize_center_crop' in name:
-        transform.extend(
+        transform.extend([
             transforms.Resize(size),
             transforms.CenterCrop(size),
-        )
+        ])
     elif 'resize_only' in name:
         transform.extend([
             transforms.Resize((size, size)),
@@ -41,7 +41,7 @@ def data_transform_fun(name, size=224):
         ])
 
     if 'colorjitter' in name:
-        transform.extend(
+        transform.append(
             transforms.ColorJitter(brightness=0.4, saturation=0.4, hue=0.2)
         )
 

@@ -85,6 +85,7 @@ class CLASSIFIER:
 
     def fit_seen(self):
         best_acc = 0
+        best_acc_list = []
         best_model = copy.deepcopy(self.model.state_dict())
         for epoch in range(self.nepoch):
             for i in range(0, self.ntrain, self.batch_size):
@@ -101,7 +102,8 @@ class CLASSIFIER:
             if acc > best_acc:
                 best_acc = acc
                 best_model = copy.deepcopy(self.model.state_dict())
-        return best_acc, best_model, acc_list
+                best_acc_list = acc_list
+        return best_acc, best_model, best_acc_list
 
     def fit_zsl(self):
         best_acc = -1

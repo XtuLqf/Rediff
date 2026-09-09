@@ -485,7 +485,7 @@ class ZERODIFF(torch.nn.Module):
         R_cost.backward()
 
         criticD_real_x0 = -self.netD_x0(x_0_real, att_0_real).mean() if self.gamma_x0 > 0 else torch.tensor(0.0).to(self.device)
-        criticG_real_xt = -self.netD_xt(x_t_real, x_tp1_real, att_0_real, con_0_real, _ts_feat).mean() if self.gamma_x0 > 0 else torch.tensor(0.0).to(self.device)
+        criticG_real_xt = -self.netD_xt(x_t_real, x_tp1_real, att_0_real, con_0_real, _ts_feat).mean() if self.gamma_xt > 0 else torch.tensor(0.0).to(self.device)
         criticD_real_xc = -self.netD_xc(x_0_real, con_0_real).mean()
         criticD_real = self.gamma_x0 * criticD_real_x0 + self.gamma_xt * criticG_real_xt + criticD_real_xc
         criticD_real = self.gamma_ADV * criticD_real
@@ -905,6 +905,8 @@ for epoch in range(start_epoch, opt.nepoch):
         syn_feature_seen, syn_con_seen, syn_label_seen = generate_syn_feature(zerodiff, data.seenclasses, data.attribute, opt.syn_num)
 
         # Train Seen classifier in V
+        # Release each classifier after consuming its metrics, before the next
+        # constructor allocates feature matrices and CUDA optimizer state.
         seen_cls_V = classifier.CLASSIFIER(syn_feature_seen, util.map_label(syn_label_seen, data.seenclasses), \
                                            data, data.seenclasses.size(0), opt.cuda, opt.classifier_lr, 0.5, 25,
                                            opt.syn_num, cls_mode="seen")
@@ -914,6 +916,7 @@ for epoch in range(start_epoch, opt.nepoch):
         log_record = 'Seen (V): %.4f' % (acc)
         print(log_record)
         logger.write(log_record + '\n')
+        del seen_cls_V
 
         # Generalized zero-shot learning
         if opt.gzsl:
@@ -936,6 +939,7 @@ for epoch in range(start_epoch, opt.nepoch):
             gzsl_cls_V.acc_unseen, gzsl_cls_V.acc_seen, gzsl_cls_V.H)
             print(log_record)
             logger.write(log_record + '\n')
+            del gzsl_cls_V
 
             gzsl_cls_V = classifier.CLASSIFIER(train_X_pro, train_Y_pro, data, nclass, opt.cuda, opt.classifier_lr, 0.5, \
                                                25, opt.syn_num, cls_mode="GZSL")
@@ -947,6 +951,7 @@ for epoch in range(start_epoch, opt.nepoch):
             gzsl_cls_V.acc_unseen, gzsl_cls_V.acc_seen, gzsl_cls_V.H)
             print(log_record)
             logger.write(log_record + '\n')
+            del gzsl_cls_V
 
             # Train GZSL classifier in VS
             gzsl_cls_VS = classifier.CLASSIFIER(train_X, train_Y, data, nclass, opt.cuda, opt.classifier_lr, 0.5, \
@@ -960,6 +965,7 @@ for epoch in range(start_epoch, opt.nepoch):
             gzsl_cls_VS.acc_unseen, gzsl_cls_VS.acc_seen, gzsl_cls_VS.H)
             print(log_record)
             logger.write(log_record + '\n')
+            del gzsl_cls_VS
 
             # Train GZSL classifier in VS
             gzsl_cls_VS = classifier.CLASSIFIER(train_X_pro, train_Y_pro, data, nclass, opt.cuda, opt.classifier_lr,
@@ -974,6 +980,7 @@ for epoch in range(start_epoch, opt.nepoch):
             gzsl_cls_VS.acc_unseen, gzsl_cls_VS.acc_seen, gzsl_cls_VS.H)
             print(log_record)
             logger.write(log_record + '\n')
+            del gzsl_cls_VS
 
             # Train GZSL classifier in C
             gzsl_cls_C = classifier.CLASSIFIER(train_X, train_Y, data, nclass, opt.cuda, opt.classifier_lr, 0.5, \
@@ -986,6 +993,7 @@ for epoch in range(start_epoch, opt.nepoch):
                 gzsl_cls_C.acc_unseen, gzsl_cls_C.acc_seen, gzsl_cls_C.H)
             print(log_record)
             logger.write(log_record + '\n')
+            del gzsl_cls_C
 
             # Train GZSL classifier in C
             gzsl_cls_C = classifier.CLASSIFIER(train_X_pro, train_Y_pro, data, nclass, opt.cuda, opt.classifier_lr, 0.5, \
@@ -998,6 +1006,7 @@ for epoch in range(start_epoch, opt.nepoch):
                 gzsl_cls_C.acc_unseen, gzsl_cls_C.acc_seen, gzsl_cls_C.H)
             print(log_record)
             logger.write(log_record + '\n')
+            del gzsl_cls_C
 
             # Train GZSL classifier in VC
             gzsl_cls_VC = classifier.CLASSIFIER(train_X, train_Y, data, nclass, opt.cuda, opt.classifier_lr, 0.5, \
@@ -1010,6 +1019,7 @@ for epoch in range(start_epoch, opt.nepoch):
             gzsl_cls_VC.acc_unseen, gzsl_cls_VC.acc_seen, gzsl_cls_VC.H)
             print(log_record)
             logger.write(log_record + '\n')
+            del gzsl_cls_VC
 
             # Train GZSL classifier in VC
             gzsl_cls_VC = classifier.CLASSIFIER(train_X_pro, train_Y_pro, data, nclass, opt.cuda, opt.classifier_lr,
@@ -1022,6 +1032,7 @@ for epoch in range(start_epoch, opt.nepoch):
             gzsl_cls_VC.acc_unseen, gzsl_cls_VC.acc_seen, gzsl_cls_VC.H)
             print(log_record)
             logger.write(log_record + '\n')
+            del gzsl_cls_VC
 
             # Train GZSL classifier in VCS
             gzsl_cls_VCS = classifier.CLASSIFIER(train_X, train_Y, data, nclass, opt.cuda, opt.classifier_lr, 0.5, \
@@ -1035,6 +1046,7 @@ for epoch in range(start_epoch, opt.nepoch):
                 gzsl_cls_VCS.acc_unseen, gzsl_cls_VCS.acc_seen, gzsl_cls_VCS.H)
             print(log_record)
             logger.write(log_record + '\n')
+            del gzsl_cls_VCS
 
             # Train GZSL classifier in VC
             gzsl_cls_VCS = classifier.CLASSIFIER(train_X_pro, train_Y_pro, data, nclass, opt.cuda, opt.classifier_lr,
@@ -1051,6 +1063,7 @@ for epoch in range(start_epoch, opt.nepoch):
                 gzsl_cls_VCS.acc_unseen, gzsl_cls_VCS.acc_seen, gzsl_cls_VCS.H)
             print(log_record)
             logger.write(log_record + '\n')
+            del gzsl_cls_VCS
 
         # Zero-shot learning
         # Train ZSL classifier in V
@@ -1065,6 +1078,7 @@ for epoch in range(start_epoch, opt.nepoch):
         log_record = 'ZSL (V): %.4f' % (acc)
         print(log_record)
         logger.write(log_record + '\n')
+        del zsl_cls_V
 
         # Train ZSL classifier in V
         zsl_cls_V = classifier.CLASSIFIER(syn_feature_pro, util.map_label(syn_label_pro, data.unseenclasses), \
@@ -1079,6 +1093,7 @@ for epoch in range(start_epoch, opt.nepoch):
         log_record = 'ZSL pro (V): %.4f' % (acc)
         print(log_record)
         logger.write(log_record + '\n')
+        del zsl_cls_V
 
         # Train ZSL classifier in VS
         zsl_cls_VS = classifier.CLASSIFIER(syn_feature, util.map_label(syn_label, data.unseenclasses), \
@@ -1093,6 +1108,7 @@ for epoch in range(start_epoch, opt.nepoch):
         log_record = 'ZSL (VS): %.4f' % (acc)
         print(log_record)
         logger.write(log_record + '\n')
+        del zsl_cls_VS
 
         # Train ZSL classifier in VS
         zsl_cls_VS = classifier.CLASSIFIER(syn_feature_pro, util.map_label(syn_label_pro, data.unseenclasses), \
@@ -1108,6 +1124,7 @@ for epoch in range(start_epoch, opt.nepoch):
         log_record = 'ZSL pro (VS): %.4f' % (acc)
         print(log_record)
         logger.write(log_record + '\n')
+        del zsl_cls_VS
 
         # Train ZSL classifier in C
         zsl_cls_C = classifier.CLASSIFIER(syn_feature, util.map_label(syn_label, data.unseenclasses), \
@@ -1121,6 +1138,7 @@ for epoch in range(start_epoch, opt.nepoch):
         log_record = 'ZSL (C): %.4f' % (acc)
         print(log_record)
         logger.write(log_record + '\n')
+        del zsl_cls_C
 
         # Train ZSL classifier in C
         zsl_cls_C = classifier.CLASSIFIER(syn_feature_pro, util.map_label(syn_label_pro, data.unseenclasses), \
@@ -1134,6 +1152,7 @@ for epoch in range(start_epoch, opt.nepoch):
         log_record = 'ZSL pro (C): %.4f' % (acc)
         print(log_record)
         logger.write(log_record + '\n')
+        del zsl_cls_C
 
         # Train ZSL classifier in VC
         zsl_cls_VC = classifier.CLASSIFIER(syn_feature, util.map_label(syn_label, data.unseenclasses), \
@@ -1147,6 +1166,7 @@ for epoch in range(start_epoch, opt.nepoch):
         log_record = 'ZSL (VC): %.4f' % (acc)
         print(log_record)
         logger.write(log_record + '\n')
+        del zsl_cls_VC
 
         # Train ZSL classifier in VC
         zsl_cls_VC = classifier.CLASSIFIER(syn_feature_pro, util.map_label(syn_label_pro, data.unseenclasses), \
@@ -1160,6 +1180,7 @@ for epoch in range(start_epoch, opt.nepoch):
         log_record = 'ZSL pro (VC): %.4f' % (acc)
         print(log_record)
         logger.write(log_record + '\n')
+        del zsl_cls_VC
 
         # Train ZSL classifier in VCS
         zsl_cls_VCS = classifier.CLASSIFIER(syn_feature, util.map_label(syn_label, data.unseenclasses), \
@@ -1174,6 +1195,7 @@ for epoch in range(start_epoch, opt.nepoch):
         log_record = 'ZSL (VCS): %.4f' % (acc)
         print(log_record)
         logger.write(log_record + '\n')
+        del zsl_cls_VCS
 
         # Train ZSL classifier in VC
         zsl_cls_VCS = classifier.CLASSIFIER(syn_feature_pro, util.map_label(syn_label_pro, data.unseenclasses), \
@@ -1189,6 +1211,7 @@ for epoch in range(start_epoch, opt.nepoch):
         log_record = 'ZSL pro (VCS): %.4f' % (acc)
         print(log_record)
         logger.write(log_record + '\n')
+        del zsl_cls_VCS
 
         # Train Seen classifier in V
         seen_cls_V = classifier.CLASSIFIER(syn_feature_seen, util.map_label(syn_label_seen, data.seenclasses), \
@@ -1200,6 +1223,7 @@ for epoch in range(start_epoch, opt.nepoch):
         log_record = 'Seen (V): %.4f' % (acc)
         print(log_record)
         logger.write(log_record + '\n')
+        del seen_cls_V
 
         # reset G to training mode
         zerodiff.train()

@@ -32,8 +32,10 @@ parser.add_argument('--encoded_noise', action='store_true', default=False, help=
 parser.add_argument('--manualSeed', type=int, help='manual seed')
 parser.add_argument('--nclass_all', type=int, default=200, help='number of all classes')
 parser.add_argument('--validation', action='store_true', default=False, help='enables validation mode')
-parser.add_argument("--encoder_layer_sizes", type=list, default=[8192, 4096])
-parser.add_argument("--decoder_layer_sizes", type=list, default=[4096, 8192])
+parser.add_argument("--encoder_layer_sizes", type=int, nargs=2, default=[8192, 4096],
+                    help="two integer layer sizes, e.g. --encoder_layer_sizes 2048 4096")
+parser.add_argument("--decoder_layer_sizes", type=int, nargs=2, default=[4096, 8192],
+                    help="two integer layer sizes, e.g. --decoder_layer_sizes 4096 2048")
 parser.add_argument("--conditional", action='store_true',default=True)
 parser.add_argument("--split_percent", type=int, default=100)
 ###

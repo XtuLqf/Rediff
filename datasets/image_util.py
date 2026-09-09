@@ -43,12 +43,13 @@ def preprocessing_fun(opt, train_feature, test_seen_feature, test_unseen_feature
             test_seen_feature = torch.from_numpy(test_seen_feature).float()
             test_seen_feature.mul_(1 / mx)
         else:
-            train_feature = torch.from_numpy(train_feature).float()
-            test_unseen_feature = torch.from_numpy(test_unseen_feature).float()
-            test_seen_feature = torch.from_numpy(test_seen_feature).float()
+            train_feature = torch.as_tensor(train_feature).float()
+            test_unseen_feature = torch.as_tensor(test_unseen_feature).float()
+            test_seen_feature = torch.as_tensor(test_seen_feature).float()
     else:
-        train_feature = torch.from_numpy(train_feature).float()
-        test_unseen_feature = torch.from_numpy(test_unseen_feature).float()
+        train_feature = torch.as_tensor(train_feature).float()
+        test_unseen_feature = torch.as_tensor(test_unseen_feature).float()
+        test_seen_feature = torch.as_tensor(test_seen_feature).float()
 
     return train_feature, test_seen_feature, test_unseen_feature
 
