@@ -8,6 +8,7 @@ from pathlib import Path
 import random
 import runpy
 import sys
+import subprocess
 
 import numpy as np
 import pytest
@@ -366,6 +367,51 @@ def test_launcher_accepts_explicit_drg_outside_default_directory(monkeypatch, tm
     assert calls[0][-4:-2] == ['--nepoch', '1']
 
 
+@pytest.mark.parametrize('experiment,grouping,weight', [('S0', 'matched', 0), ('S1', 'matched', 1), ('S2', 'mixed', 1)])
+def test_awa2_short_experiments_keep_settings_and_skip_existing_runs(monkeypatch, tmp_path, experiment, grouping, weight):
+    root = Path(__file__).resolve().parents[1]
+    checkpoint = tmp_path / 'drg.tar'
+    checkpoint.touch()
+    run_name = {'S0': 's0_control', 'S1': 's1_matched', 'S2': 's2_mixed'}[experiment]
+    base = root / 'out' / 'ds_reg' / 'AWA2' / f'{run_name}_seed9182'
+    original_exists = Path.exists
+    monkeypatch.setattr(Path, 'exists', lambda path: path in (base, base.with_name(base.name + '_run2')) or original_exists(path))
+    monkeypatch.setattr(sys, 'argv', ['launcher', '--experiment', experiment, '--netR_model_path', str(checkpoint)])
+    calls = []
+    monkeypatch.setattr(subprocess, 'run', lambda command, **kwargs: calls.append(command))
+    runpy.run_path(str(root / 'scripts' / 'run_awa2_zerodiff_DFG_train.py'))
+    options = parse_options(monkeypatch, *calls[0][2:])
+    assert options.run_dir == str(base.with_name(base.name + '_run3'))
+    assert options.rel_objective == 'sdga' and options.gamma_rel == 1
+    assert options.rel_pair_grouping == grouping
+    assert options.rel_generator_class_weight == options.rel_generator_instance_weight == weight
+    assert options.rel_class_weight == options.rel_instance_weight == options.rel_teacher_anchor_weight == 1
+    assert options.g_batch_mode == 'pk' and options.g_timestep_policy == 'class_group'
+    assert (options.g_pk_classes, options.g_pk_samples, options.batch_size, options.n_T) == (16, 4, 64, 4)
+    assert (options.rel_time_mode, options.rel_time_strength, options.rel_time_pair_weight) == ('fixed', 0, 1)
+    assert (options.nepoch, options.eval_interval, options.syn_num, options.manualSeed) == (300, 5, 5400, 9182)
+
+
+def test_awa2_short_resume_uses_checkpoint_directory_and_preserves_exit_code(monkeypatch, tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    drg = tmp_path / 'drg.tar'
+    drg.touch()
+    resume = tmp_path / 'prior_run' / 'dfg_training_last.tar'
+    monkeypatch.setattr(sys, 'argv', ['launcher', '--experiment', 'S1', '--netR_model_path', str(drg),
+                                     '--resume_training', str(resume), '--nepoch', '400'])
+    calls = []
+    def fail(command, **kwargs):
+        calls.append(command)
+        raise subprocess.CalledProcessError(7, command)
+    monkeypatch.setattr(subprocess, 'run', fail)
+    with pytest.raises(SystemExit) as caught:
+        runpy.run_path(str(root / 'scripts' / 'run_awa2_zerodiff_DFG_train.py'))
+    assert caught.value.code == 7
+    options = parse_options(monkeypatch, *calls[0][2:])
+    assert options.run_dir == str(resume.parent)
+    assert options.nepoch == 400 and options.resume_training == str(resume)
+
+
 def training_namespace(options):
     """Load real trainer definitions without executing its dataset/GPU entrypoint."""
     import zerodiff_tools
@@ -449,6 +495,29 @@ def test_old_checkpoint_defaults_do_not_adopt_sdga_settings(monkeypatch):
     assert normalized['g_timestep_policy'] == 'auto' and normalized['g_batch_mode'] == 'random'
 
 
+def trainer_startup_code():
+    path = Path(__file__).resolve().parents[1] / 'zerodiff_DFG_train.py'
+    nodes = ast.parse(path.read_text(encoding='utf-8')).body
+    start = next(i for i, node in enumerate(nodes) if isinstance(node, ast.Expr)
+                 and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                 and node.value.func.id == 'ensure_cuda_ready')
+    end = next(i for i, node in enumerate(nodes) if isinstance(node, ast.Assign)
+               and any(isinstance(target, ast.Name) and target.id == 'data' for target in node.targets))
+    return compile(ast.Module(body=nodes[start:end], type_ignores=[]), str(path), 'exec')
+
+
+def test_cuda_failure_stops_before_creating_outputs(monkeypatch, tmp_path):
+    options = parse_options(monkeypatch, '--run_dir', str(tmp_path / 'experiment'))
+    definitions = training_namespace(options)
+    monkeypatch.chdir(tmp_path)
+    def fail(*args, **kwargs):
+        raise RuntimeError('Error 804: forward compatibility was attempted on non supported HW')
+    monkeypatch.setattr(torch, 'empty', fail)
+    with pytest.raises(SystemExit, match='Error 804'):
+        exec(trainer_startup_code(), definitions)
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_run_directory_metadata_collision_and_resume_validation(monkeypatch, tmp_path):
     checkpoint = tmp_path / 'drg.tar'
     checkpoint.write_bytes(b'fixed DRG identity')
@@ -457,16 +526,9 @@ def test_run_directory_metadata_collision_and_resume_validation(monkeypatch, tmp
                             '--run_dir', str(tmp_path / 'experiment'), '--netR_model_path', str(checkpoint))
     options.cuda = False
     monkeypatch.chdir(tmp_path)
-    path = Path(__file__).resolve().parents[1] / 'zerodiff_DFG_train.py'
-    nodes = ast.parse(path.read_text(encoding='utf-8')).body
-    # Execute the actual startup path, stopping before dataset/model allocation.
-    start = next(i for i, node in enumerate(nodes) if isinstance(node, ast.Assign)
-                 and any(isinstance(target, ast.Name) and target.id == 'folder_name' for target in node.targets))
-    end = next(i for i, node in enumerate(nodes) if isinstance(node, ast.Assign)
-               and any(isinstance(target, ast.Name) and target.id == 'data' for target in node.targets))
     definitions = training_namespace(options)
     definitions.update(cudnn=torch.backends.cudnn, hashlib=hashlib)
-    startup = compile(ast.Module(body=nodes[start:end], type_ignores=[]), str(path), 'exec')
+    startup = trainer_startup_code()
     exec(startup, definitions)
     config_path = Path(options.run_dir) / 'config.json'
     metadata = json.loads(config_path.read_text(encoding='utf-8'))

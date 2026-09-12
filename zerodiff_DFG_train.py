@@ -35,6 +35,22 @@ class Logger(object):
         f.write(message)
         f.close()
 
+def ensure_cuda_ready():
+    """Check the actual CUDA context before creating logs or loading data."""
+    if not opt.cuda:
+        return
+    try:
+        torch.empty(1, device='cuda')
+    except (RuntimeError, AssertionError) as error:
+        raise SystemExit(
+            'CUDA 初始化失败，训练尚未开始，未创建本次输出文件。\n'
+            f'{error}\n'
+            '请先核对 nvidia-smi、torch.version.cuda 和 LD_LIBRARY_PATH。'
+        ) from None
+
+
+ensure_cuda_ready()
+
 folder_name = "./log"
 os.makedirs(folder_name, exist_ok=True)
 folder_name = "./out"

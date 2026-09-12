@@ -20,9 +20,16 @@ NETR_MODEL_CANDIDATES = [
 ]
 
 override_parser = argparse.ArgumentParser(add_help=False)
-override_parser.add_argument('--netR_model_path')
-overrides, _ = override_parser.parse_known_args()
-NETR_MODEL = Path(overrides.netR_model_path).expanduser().resolve() if overrides.netR_model_path else next(
+override_parser.add_argument('--experiment', type=str.upper, choices=['S0', 'S1', 'S2'],
+	                        help='S0: G relation off; S1: matched SDGA; S2: mixed SDGA')
+overrides, training_args = override_parser.parse_known_args()
+path_parser = argparse.ArgumentParser(add_help=False)
+path_parser.add_argument('--netR_model_path')
+path_parser.add_argument('--run_dir')
+path_parser.add_argument('--resume_training')
+path_parser.add_argument('--manualSeed', type=int, default=9182)
+paths, _ = path_parser.parse_known_args(training_args)
+NETR_MODEL = Path(paths.netR_model_path).expanduser().resolve() if paths.netR_model_path else next(
 	(candidate for candidate in NETR_MODEL_CANDIDATES if candidate.exists()),
 	None,
 )
@@ -57,8 +64,39 @@ command = [
 	'--rel_topology_norm', 'timestep',
 	'--netR_model_path', str(NETR_MODEL),
 ]
-command.extend(sys.argv[1:])
+if overrides.experiment:
+	name, grouping, class_weight, instance_weight = {
+		'S0': ('s0_control', 'matched', '0', '0'),
+		'S1': ('s1_matched', 'matched', '1', '1'),
+		'S2': ('s2_mixed', 'mixed', '1', '1'),
+	}[overrides.experiment]
+	command.extend([
+		'--gamma_rel', '1', '--rel_objective', 'sdga',
+		'--rel_time_pair_weight', '1', '--rel_time_mode', 'fixed', '--rel_time_strength', '0',
+		'--g_batch_mode', 'pk', '--g_pk_classes', '16', '--g_pk_samples', '4',
+		'--g_timestep_policy', 'class_group', '--rel_pair_grouping', grouping,
+		'--rel_generator_class_weight', class_weight, '--rel_generator_instance_weight', instance_weight,
+	])
+	if not paths.run_dir:
+		if paths.resume_training:
+			run_dir = Path(paths.resume_training).expanduser().resolve().parent
+		else:
+			base_dir = ROOT / 'out' / 'ds_reg' / 'AWA2' / f'{name}_seed{paths.manualSeed}'
+			run_dir = base_dir
+			attempt = 2
+			while run_dir.exists():
+				run_dir = base_dir.with_name(f'{base_dir.name}_run{attempt}')
+				attempt += 1
+		command.extend(['--run_dir', str(run_dir)])
+	else:
+		run_dir = paths.run_dir
+	print(f'实验 {overrides.experiment} | 输出目录: {run_dir}', flush=True)
+command.extend(training_args)
 # Resolve explicit relative paths before the subprocess changes directory.
 command.extend(['--netR_model_path', str(NETR_MODEL)])
 
-subprocess.run(command, cwd=ROOT, check=True, env=env)
+try:
+	subprocess.run(command, cwd=ROOT, check=True, env=env)
+except subprocess.CalledProcessError as error:
+	# The trainer already printed the cause; do not repeat its entire argument list.
+	raise SystemExit(error.returncode) from None
