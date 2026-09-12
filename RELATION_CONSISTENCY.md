@@ -1,5 +1,10 @@
 # Time-aware multi-granularity relation consistency for ZeroDiff
 
+On `codex/ds-reg`, this file describes the inherited time-aware v1.07.3
+implementation. The proposed DS-ReG modules, diagnostic extensions, and revised
+contribution statements are in [DS_REG_DESIGN.md](DS_REG_DESIGN.md); they are
+research targets, not changes already implemented in the training code.
+
 This branch keeps the original DFG data path, calibrates the stable relation
 space from `exp/vsra`, and coordinates semantic and contrastive topology at
 matched diffusion timesteps.
