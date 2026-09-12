@@ -4,6 +4,8 @@ from __future__ import print_function
 import faulthandler
 import gc
 import math
+import json
+import hashlib
 import random
 import torch
 import torch.autograd as autograd
@@ -18,6 +20,7 @@ from sklearn import preprocessing
 import numpy as np
 import os
 from relation import TimeAwareVSRA, sample_relation_group_timesteps
+from relation.timestep_schedule import mixed_relation_groups
 
 faulthandler.enable(all_threads=True)
 
@@ -52,7 +55,44 @@ relation_run_config = {
     'time_strength': opt.rel_time_strength,
     'reliability_floor': opt.rel_reliability_floor,
     'topology_norm': opt.rel_topology_norm,
+    'objective': opt.rel_objective,
+    'generator_class_weight': opt.rel_generator_class_weight,
+    'generator_instance_weight': opt.rel_generator_instance_weight,
+    'g_batch_mode': opt.g_batch_mode,
+    'g_pk_classes': opt.g_pk_classes if opt.g_batch_mode == 'pk' else 0,
+    'g_pk_samples': opt.g_pk_samples if opt.g_batch_mode == 'pk' else 0,
+    'g_timestep_policy': opt.g_timestep_policy,
+    'pair_grouping': opt.rel_pair_grouping,
 }
+
+
+def normalized_relation_config(config):
+    """Expand old checkpoint defaults without allowing a new objective on resume."""
+    config = dict(config or {})
+    defaults = {
+        'objective': 'legacy', 'generator_class_weight': config.get('class_weight'),
+        'generator_instance_weight': config.get('instance_weight'),
+        'g_batch_mode': 'random', 'g_pk_classes': 0, 'g_pk_samples': 0,
+        'g_timestep_policy': 'auto', 'pair_grouping': 'matched',
+    }
+    for key, value in defaults.items():
+        config.setdefault(key, value)
+    return config
+
+
+new_relation_behavior = (
+    opt.rel_objective != 'legacy' or opt.g_batch_mode != 'random'
+    or opt.g_timestep_policy != 'auto'
+    or opt.rel_generator_class_weight != opt.rel_class_weight
+    or opt.rel_generator_instance_weight != opt.rel_instance_weight
+)
+if new_relation_behavior and not opt.run_dir:
+    raise ValueError('New relation/sampling settings require --run_dir to isolate experiments.')
+if opt.run_dir:
+    opt.run_dir = os.path.abspath(opt.run_dir)
+    if os.path.isdir(opt.run_dir) and os.listdir(opt.run_dir) and not opt.resume_training:
+        raise FileExistsError('Run directory is not empty; use a new --run_dir or --resume_training.')
+    os.makedirs(opt.run_dir, exist_ok=True)
 if opt.gamma_rel > 0:
     relation_run_suffix = (
         f"_tvsra-g{opt.gamma_rel:g}"
@@ -71,21 +111,33 @@ else:
 logger_name = "./log/%s/train_zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_f:%.1f_num:%s" % (
     opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
     str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.factor_dist, opt.syn_num) + relation_run_suffix
-logger = Logger(logger_name, append=bool(opt.resume_training))
 model_save_name = "./out/%s/zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_f:%.1f_num:%d" % (
     opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
     str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.factor_dist, opt.syn_num) + relation_run_suffix
+if opt.run_dir:
+    logger_name = os.path.join(opt.run_dir, 'train')
+    model_save_name = os.path.join(opt.run_dir, 'dfg')
+logger = Logger(logger_name, append=bool(opt.resume_training))
 if opt.gamma_rel > 0:
     relation_config_record = "TimeAwareVSRA configuration: " + str(relation_run_config)
     print(relation_config_record)
     logger.write(relation_config_record + '\n')
 
 
+if opt.manualSeed is None and opt.resume_training:
+    # Direct invocations may originally have let the trainer choose the seed.
+    # Recover that choice before comparing the complete training configuration.
+    seed_checkpoint = torch.load(opt.resume_training, map_location='cpu', weights_only=False)
+    opt.manualSeed = seed_checkpoint.get('training_config', {}).get('manualSeed')
+    del seed_checkpoint
 if opt.manualSeed is None:
     opt.manualSeed = random.randint(1, 10000)
 print("Random Seed: ", opt.manualSeed)
 random.seed(opt.manualSeed)
 torch.manual_seed(opt.manualSeed)
+# Legacy keeps its original RNG behavior; isolated runs also seed NumPy.
+if opt.run_dir:
+    np.random.seed(opt.manualSeed)
 if opt.cuda:
     torch.cuda.manual_seed_all(opt.manualSeed)
 cudnn.benchmark = False
@@ -93,6 +145,30 @@ cudnn.deterministic = True
 if torch.cuda.is_available() and not opt.cuda:
     print("WARNING: You have a CUDA device, so you should probably run with --cuda")
 # load data
+training_run_config = {
+    key: value for key, value in vars(opt).items()
+    if key not in {'nepoch', 'resume_training', 'run_dir', 'training_checkpoint_interval', 'workers'}
+}
+for path_key in ('netR_model_path', 'dataroot'):
+    if training_run_config[path_key] is not None:
+        training_run_config[path_key] = os.path.abspath(training_run_config[path_key])
+if opt.run_dir and opt.netR_model_path:
+    drg_digest = hashlib.sha256()
+    with open(opt.netR_model_path, 'rb') as drg_file:
+        for chunk in iter(lambda: drg_file.read(1024 * 1024), b''):
+            drg_digest.update(chunk)
+    training_run_config['drg_sha256'] = drg_digest.hexdigest()
+if opt.run_dir:
+    config_path = os.path.join(opt.run_dir, 'config.json')
+    if os.path.exists(config_path):
+        with open(config_path, encoding='utf-8') as config_file:
+            previous_config = json.load(config_file)
+        if previous_config['training'] != training_run_config:
+            raise ValueError('Run directory configuration differs from the requested training configuration.')
+    else:
+        with open(config_path, 'w', encoding='utf-8') as config_file:
+            json.dump({'training': training_run_config, 'relation': relation_run_config,
+                       'requested_epochs': opt.nepoch}, config_file, ensure_ascii=False, indent=2)
 data = util.DATA_LOADER(opt)
 print("# of training samples: ", data.ntrain)
 
@@ -198,10 +274,11 @@ def save_zerodiff(zerodiff, save_name, post):
     if zerodiff.relationship_enabled:
         checkpoint['state_dict_VSRA'] = zerodiff.time_aware_vsra.state_dict()
         checkpoint['method_metadata'] = {
-            'name': 'time_aware_vsra',
+            'name': 'ds_reg_sdga' if opt.rel_objective == 'sdga' else 'time_aware_vsra',
             'config': relation_run_config,
         }
-    torch.save(checkpoint, save_name + post + '.tar')
+    separator = '_' if opt.run_dir else ''
+    torch.save(checkpoint, save_name + separator + post + '.tar')
 
 
 BEST_STATE_NAMES = (
@@ -224,6 +301,8 @@ def save_training_state(zerodiff, save_name, epoch):
     checkpoint = {
         'next_epoch': epoch + 1,
         'relation_config': relation_run_config,
+        'training_config': training_run_config,
+        'generator_rng_states': {key: rng.get_state() for key, rng in zerodiff.generator_rngs.items()},
         'state_dict_E': zerodiff.netE.state_dict(),
         'state_dict_G': zerodiff.netG.state_dict(),
         'state_dict_Dec': zerodiff.netDec.state_dict(),
@@ -261,10 +340,23 @@ def load_training_state(zerodiff, checkpoint_path):
         map_location=zerodiff.device,
         weights_only=False,
     )
-    if checkpoint.get('relation_config') != relation_run_config:
+    if normalized_relation_config(checkpoint.get('relation_config')) != relation_run_config:
         raise ValueError(
             "Resume checkpoint relation configuration does not match this run."
         )
+    saved_config = checkpoint.get('training_config')
+    if saved_config is not None and saved_config != training_run_config:
+        differences = sorted(key for key in set(saved_config) | set(training_run_config)
+                             if saved_config.get(key) != training_run_config.get(key))
+        raise ValueError('Resume training configuration differs: ' + ', '.join(differences))
+    rng_states = checkpoint.get('generator_rng_states')
+    if rng_states is None and new_relation_behavior:
+        raise ValueError('New sampling/objective runs require generator RNG states in the checkpoint.')
+    if rng_states is not None:
+        if set(rng_states) != set(zerodiff.generator_rngs):
+            raise ValueError('Checkpoint generator RNG streams do not match.')
+        for key, rng in zerodiff.generator_rngs.items():
+            rng.set_state(rng_states[key].cpu())
     zerodiff.netE.load_state_dict(checkpoint['state_dict_E'])
     zerodiff.netG.load_state_dict(checkpoint['state_dict_G'])
     zerodiff.netDec.load_state_dict(checkpoint['state_dict_Dec'])
@@ -364,6 +456,9 @@ class ZERODIFF(torch.nn.Module):
                 ),
                 reliability_floor=opt.rel_reliability_floor,
                 topology_norm=opt.rel_topology_norm,
+                objective=opt.rel_objective,
+                generator_class_weight=opt.rel_generator_class_weight,
+                generator_instance_weight=opt.rel_generator_instance_weight,
             ).to(self.device)
             self.optimizerVSRA = optim.Adam(
                 self.time_aware_vsra.parameters(),
@@ -375,6 +470,17 @@ class ZERODIFF(torch.nn.Module):
 
         self.batch_size = opt.batch_size
         self.data = data
+        # Independent streams keep mixed grouping from shifting future G/D noise,
+        # minibatches or time assignments. They are persisted in full checkpoints.
+        self.generator_rngs = {
+            name: torch.Generator().manual_seed(opt.manualSeed + offset)
+            for name, offset in [('batch', 101), ('timestep', 211), ('grouping', 307)]
+        }
+        if opt.g_batch_mode == 'pk':
+            pk_info = self.data.prepare_pk_sampler(opt.g_pk_classes, opt.g_pk_samples)
+            pk_record = 'Generator PK sampler: ' + str(pk_info)
+            print(pk_record)
+            logger.write(pk_record + '\n')
 
         self.netR = zerodiff_tools.DRG_Generator(opt).to(self.device)
         netR_state_dict = torch.load(
@@ -392,6 +498,8 @@ class ZERODIFF(torch.nn.Module):
         self.init_recorder()
 
     def init_recorder(self):
+        self.relation_block_sums = {}
+        self.relation_block_updates = 0
         self.interval_recorder_sum['criticD_train_real_x0'] = 0.0
         self.interval_recorder_sum['criticD_train_real_xt'] = 0.0
         self.interval_recorder_sum['criticD_train_real_xc'] = 0.0
@@ -562,6 +670,13 @@ class ZERODIFF(torch.nn.Module):
                 con_0_real,
                 att_0_real,
             )
+        # Calibrate on the original D batch before selecting the complete G batch.
+        # Every E/G, VAE, adversarial, reconstruction and relation term uses it.
+        if opt.g_batch_mode == 'pk':
+            x_0_real, con_0_real, att_0_real, label = (
+                tensor.to(self.device)
+                for tensor in self.data.next_seen_pk_batch(self.generator_rngs['batch'])
+            )
         for p in self.netE.parameters():
             p.requires_grad = True
         for p in self.netG.parameters():
@@ -581,15 +696,27 @@ class ZERODIFF(torch.nn.Module):
 
         z, means, log_var = self.netE(x_0_real, att_0_real)
 
-        if self.relationship_enabled and self.time_aware_vsra.time_pair_weight > 0:
-            _ts_feat = sample_relation_group_timesteps(label, self.n_T)
+        group_times = opt.g_timestep_policy == 'class_group' or (
+            opt.g_timestep_policy == 'auto' and self.relationship_enabled
+            and self.time_aware_vsra.time_pair_weight > 0
+        )
+        # Leave the default legacy random draws exactly where they were.
+        private_rng = self.generator_rngs['timestep'] if new_relation_behavior else None
+        if group_times:
+            _ts_feat = sample_relation_group_timesteps(label, self.n_T, private_rng)
         else:
             _ts_feat = torch.randint(
                 0,
                 self.n_T,
                 (x_0_real.shape[0],),
                 dtype=torch.int64,
-                device=self.device,
+                device='cpu' if private_rng is not None else self.device,
+                generator=private_rng,
+            ).to(self.device)
+        relation_group_ids = _ts_feat
+        if opt.rel_pair_grouping == 'mixed':
+            relation_group_ids = mixed_relation_groups(
+                label, _ts_feat, self.n_T, self.generator_rngs['grouping'],
             )
         x_t_real, x_tp1_real, _ = self.q_sample_pairs(x_0_real, _ts_feat)
         x_0_fake = self.netG(z, att_0_real, con_0_real, x_tp1_real.detach(), _ts_feat)
@@ -619,7 +746,10 @@ class ZERODIFF(torch.nn.Module):
                 con_0_real,
                 label,
                 _ts_feat,
+                relation_group_ids=relation_group_ids,
             )
+            if 'blocks' in relation_losses:
+                self.record_relation_blocks(relation_losses['blocks'], relation_group_ids, _ts_feat)
             errG += self.gamma_rel * relation_losses['total']
             self.interval_recorder_sum['rel_semantic_loss'] += relation_losses['semantic'].detach().item()
             self.interval_recorder_sum['rel_contrastive_loss'] += relation_losses['contrastive'].detach().item()
@@ -640,6 +770,33 @@ class ZERODIFF(torch.nn.Module):
         if self.gamma_recons > 0 and not opt.freeze_dec:  # not train decoder at feedback time
             self.optimizerDec.step()
         return G_cost, vae_loss_seen
+
+    def record_relation_blocks(self, blocks, relation_groups, generation_timesteps):
+        """Accumulate detached per-update block values; no autograd graph survives."""
+        metrics = {key: value.detach().float() for key, value in blocks.items() if value.ndim > 0}
+        composition = torch.bincount(
+            relation_groups * self.n_T + generation_timesteps,
+            minlength=self.n_T * self.n_T,
+        ).reshape(self.n_T, self.n_T).float()
+        metrics['generation_state_counts'] = composition
+        retention = self.prior_coefficients.sqrt_alphas_bar[1:self.n_T + 1].square().detach()
+        metrics['signal_retention_mean'] = (composition @ retention) / composition.sum(1).clamp_min(1)
+        for key, value in metrics.items():
+            if key not in self.relation_block_sums:
+                self.relation_block_sums[key] = torch.zeros_like(value)
+            self.relation_block_sums[key] += value
+        self.relation_block_updates += 1
+
+    def relation_block_summary(self, epoch):
+        if not self.relation_block_updates:
+            return None
+        metrics = {key: value / self.relation_block_updates for key, value in self.relation_block_sums.items()}
+        if any(not torch.isfinite(value).all() for value in metrics.values()):
+            raise FloatingPointError('Non-finite SDGA block metrics at epoch %d' % epoch)
+        return {'epoch': epoch, 'grouping': opt.rel_pair_grouping,
+                'updates': self.relation_block_updates,
+                'signal_retention_by_generation_state': self.prior_coefficients.sqrt_alphas_bar[1:self.n_T + 1].square().detach().cpu().tolist(),
+                **{key: value.cpu().tolist() for key, value in metrics.items()}}
 
     def sample_from_model(self, att, progressive=False):
         n_sample = att.shape[0]
@@ -846,6 +1003,11 @@ for epoch in range(start_epoch, opt.nepoch):
                 'rel_timestep',
             )
         }
+    block_summary = zerodiff.relation_block_summary(epoch)
+    if block_summary is not None:
+        block_record = 'SDGA blocks: ' + json.dumps(block_summary, allow_nan=False)
+        print(block_record)
+        logger.write(block_record + '\n')
     zerodiff.init_recorder()
 
     log_record = '[%d/%d] D_train_real_x0: %.6f, D_train_real_xt: %.6f, D_train_real_xc: %.6f' % (epoch, opt.nepoch, criticD_train_real_x0, criticD_train_real_xt, criticD_train_real_xc)
@@ -1357,7 +1519,7 @@ for epoch in range(start_epoch, opt.nepoch):
 
     if (
         opt.training_checkpoint_interval > 0
-        and epoch % opt.training_checkpoint_interval == 0
+        and (epoch % opt.training_checkpoint_interval == 0 or epoch == opt.nepoch - 1)
     ):
         checkpoint_path = save_training_state(zerodiff, model_save_name, epoch)
         checkpoint_record = 'Saved recoverable training state: ' + checkpoint_path

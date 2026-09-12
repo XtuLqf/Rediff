@@ -219,3 +219,78 @@ def time_aware_pair_losses(
         "class_pairs": class_mask.sum(),
         "instance_pairs": instance_mask.sum(),
     }
+
+
+def reduce_valid_blocks(losses: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
+    """Give every nonempty relation block equal weight (empty -> graph-safe 0)."""
+    return (losses * valid.to(losses.dtype)).sum() / valid.sum().clamp_min(1)
+
+
+def sdga_pair_losses(
+    student_features: torch.Tensor,
+    semantic_features: torch.Tensor,
+    contrastive_features: torch.Tensor,
+    labels: torch.Tensor,
+    relation_groups: torch.Tensor,
+    n_groups: int,
+    topology_norm: str = "timestep",
+) -> Dict[str, torch.Tensor]:
+    """Dual topology alignment, reduced equally over nonempty relation groups.
+
+    Groups normally equal the *actual* generator timestep. The mixed control
+    supplies a separate grouping without changing the generator input. Counts
+    are ordered pairs. Normalization is differentiable only on the student.
+    A single unordered edge is flagged as degenerate, not silently removed.
+    """
+    if topology_norm not in {"global", "timestep"}:
+        raise ValueError("topology_norm must be 'global' or 'timestep'.")
+    if n_groups < 1 or labels.ndim != 1 or relation_groups.shape != labels.shape:
+        raise ValueError("Expected positive n_groups and matching 1D labels/groups.")
+    if ((relation_groups < 0) | (relation_groups >= n_groups)).any():
+        raise ValueError("Relation group index out of range.")
+    same_class = labels[:, None].eq(labels[None, :])
+    same_group = relation_groups[:, None].eq(relation_groups[None, :])
+    off_diagonal = ~torch.eye(labels.numel(), dtype=torch.bool, device=labels.device)
+    masks = {"class": ~same_class & same_group,
+             "instance": same_class & same_group & off_diagonal}
+    student = pairwise_distances(student_features)
+    with torch.no_grad():
+        teachers = {"class": pairwise_distances(semantic_features.detach()),
+                    "instance": pairwise_distances(contrastive_features.detach())}
+    result = {}
+    for name, mask in masks.items():
+        teacher = teachers[name]
+        normalize = (_normalize_relation_by_timestep if topology_norm == "timestep"
+                     else lambda r, m, g: _normalize_relation_on_mask(r, m))
+        pointwise = F.smooth_l1_loss(
+            normalize(student, mask, relation_groups),
+            normalize(teacher, mask, relation_groups), reduction="none",
+        )
+        losses, counts, student_scales, teacher_scales = [], [], [], []
+        for group in range(n_groups):
+            members = relation_groups.eq(group)
+            selected = mask & members[:, None] & members[None, :]
+            count = selected.sum()
+            counts.append(count)
+            losses.append((pointwise * selected).sum() / count.clamp_min(1) + student.sum() * 0.0)
+            # Raw mean distances expose collapse/scale changes before normalization.
+            student_scales.append((student.detach() * selected).sum() / count.clamp_min(1))
+            teacher_scales.append((teacher * selected).sum() / count.clamp_min(1))
+        counts = torch.stack(counts)
+        losses = torch.stack(losses)
+        valid = counts > 0
+        result.update({
+            name: reduce_valid_blocks(losses, valid),
+            name + "_loss_per_block": losses,
+            name + "_pair_count": counts,
+            name + "_valid": valid,
+            name + "_degenerate": counts.eq(2),
+            name + "_student_scale": torch.stack(student_scales),
+            name + "_teacher_scale": torch.stack(teacher_scales),
+            name + "_pairs": counts.sum(),
+        })
+    result["samples_per_block"] = torch.bincount(relation_groups, minlength=n_groups)
+    result["classes_per_block"] = labels.new_tensor([
+        labels[relation_groups == group].unique().numel() for group in range(n_groups)
+    ])
+    return result

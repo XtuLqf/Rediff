@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from typing import Dict
+import math
 
 import torch
 import torch.nn.functional as F
 from torch import nn
 
 from .timestep_schedule import sample_relation_weights
-from .topology import relation_alignment_components, time_aware_pair_losses
+from .topology import relation_alignment_components, time_aware_pair_losses, sdga_pair_losses
 
 
 class RelationProjector(nn.Module):
@@ -59,11 +60,25 @@ class TimeAwareVSRA(nn.Module):
         signal_retention: torch.Tensor | None = None,
         reliability_floor: float = 0.5,
         topology_norm: str = "global",
+        objective: str = "legacy",
+        generator_class_weight: float | None = None,
+        generator_instance_weight: float | None = None,
     ) -> None:
         super().__init__()
         self.n_timesteps = n_timesteps
         self.semantic_weight = class_weight
         self.contrastive_weight = instance_weight
+        self.generator_class_weight = class_weight if generator_class_weight is None else generator_class_weight
+        self.generator_instance_weight = instance_weight if generator_instance_weight is None else generator_instance_weight
+        if any(not math.isfinite(weight) or weight < 0 for weight in (
+            self.generator_class_weight, self.generator_instance_weight,
+        )):
+            raise ValueError('Generator relation coefficients must be finite and non-negative.')
+        if objective not in {"legacy", "sdga"}:
+            raise ValueError("objective must be 'legacy' or 'sdga'.")
+        if objective == "sdga" and (time_pair_weight != 1 or time_mode != "fixed" or time_strength != 0):
+            raise ValueError("SDGA requires time_pair_weight=1, time_mode=fixed, time_strength=0.")
+        self.objective = objective
         self.teacher_anchor_weight = teacher_anchor_weight
         self.distance_ratio = distance_ratio
         self.angle_ratio = angle_ratio
@@ -156,6 +171,7 @@ class TimeAwareVSRA(nn.Module):
         real_contrastive: torch.Tensor,
         labels: torch.Tensor,
         timestep: torch.Tensor,
+        relation_group_ids: torch.Tensor | None = None,
     ) -> Dict[str, torch.Tensor]:
         generated_embedding = self.visual_projector(generated_visual)
         with torch.no_grad():
@@ -164,6 +180,27 @@ class TimeAwareVSRA(nn.Module):
             )
 
         zero = generated_embedding.sum() * 0.0
+        if self.objective == "sdga":
+            groups = timestep if relation_group_ids is None else relation_group_ids
+            blocks = sdga_pair_losses(
+                generated_embedding, semantic_attributes, contrastive_teacher,
+                labels, groups, self.n_timesteps, topology_norm=self.topology_norm,
+            )
+            total = self.distance_ratio * (
+                self.generator_class_weight * blocks["class"]
+                + self.generator_instance_weight * blocks["instance"]
+            )
+            return {
+                "semantic": zero, "contrastive": zero, "distance": zero,
+                "angle": zero, "legacy_total": zero,
+                "pair_class": blocks["class"], "pair_instance": blocks["instance"],
+                "pair_total": total, "total": total,
+                "class_pairs": blocks["class_pairs"], "instance_pairs": blocks["instance_pairs"],
+                "class_weight": zero.detach() + 1, "instance_weight": zero.detach() + 1,
+                "blocks": blocks,
+            }
+        if relation_group_ids is not None and not torch.equal(relation_group_ids, timestep):
+            raise ValueError("Separate relation grouping is only supported by SDGA.")
         semantic_total = zero
         contrastive_total = zero
         legacy_distance = zero
@@ -175,16 +212,16 @@ class TimeAwareVSRA(nn.Module):
             semantic_total = semantic["total"]
             contrastive_total = contrastive["total"]
             legacy_distance = (
-                self.semantic_weight * semantic["distance"]
-                + self.contrastive_weight * contrastive["distance"]
+                self.generator_class_weight * semantic["distance"]
+                + self.generator_instance_weight * contrastive["distance"]
             )
             legacy_angle = (
-                self.semantic_weight * semantic["angle"]
-                + self.contrastive_weight * contrastive["angle"]
+                self.generator_class_weight * semantic["angle"]
+                + self.generator_instance_weight * contrastive["angle"]
             )
             legacy_total = (
-                self.semantic_weight * semantic_total
-                + self.contrastive_weight * contrastive_total
+                self.generator_class_weight * semantic_total
+                + self.generator_instance_weight * contrastive_total
             )
 
         pair_class = zero
@@ -222,8 +259,8 @@ class TimeAwareVSRA(nn.Module):
         pair_total = (
             self.distance_ratio
             * (
-                self.semantic_weight * pair_class
-                + self.contrastive_weight * pair_instance
+                self.generator_class_weight * pair_class
+                + self.generator_instance_weight * pair_instance
             )
         )
         total = (

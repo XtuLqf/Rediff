@@ -10,6 +10,7 @@ import torch
 def sample_relation_group_timesteps(
     labels: torch.Tensor,
     n_timesteps: int,
+    generator: torch.Generator | None = None,
 ) -> torch.Tensor:
     """Assign each class to one timestep while balancing samples across groups."""
     if n_timesteps < 1:
@@ -18,9 +19,12 @@ def sample_relation_group_timesteps(
         raise ValueError("labels must be a one-dimensional tensor.")
     if labels.numel() == 0:
         return labels.new_empty(0)
+    # New experiments use a private CPU stream; the default keeps legacy RNG use.
+    if generator is not None and labels.device.type != 'cpu':
+        return sample_relation_group_timesteps(labels.cpu(), n_timesteps, generator).to(labels.device)
 
     classes, counts = torch.unique(labels, sorted=False, return_counts=True)
-    class_order = torch.randperm(classes.numel(), device=labels.device)
+    class_order = torch.randperm(classes.numel(), device=labels.device, generator=generator)
     group_loads = torch.zeros(n_timesteps, dtype=torch.long, device=labels.device)
     timesteps = torch.empty_like(labels, dtype=torch.long)
     for class_index in class_order:
@@ -29,12 +33,44 @@ def sample_relation_group_timesteps(
             as_tuple=False,
         ).flatten()
         chosen = lightest[
-            torch.randint(lightest.numel(), (1,), device=labels.device)
+            torch.randint(lightest.numel(), (1,), device=labels.device, generator=generator)
         ].squeeze(0)
         label = classes[class_index]
         timesteps[labels == label] = chosen
         group_loads[chosen] += counts[class_index]
     return timesteps
+
+
+def mixed_relation_groups(labels, generation_timesteps, n_timesteps, generator):
+    """Mix real states in equal-size relation blocks, keeping every class intact.
+
+    A cyclic allocation sends one class from each source state to every rank's
+    destination. Each destination has the original number of classes/samples.
+    This is an ablation of relation comparability, not of generator conditioning.
+    """
+    device = labels.device
+    labels = labels.detach().cpu()
+    times = generation_timesteps.detach().cpu()
+    if labels.ndim != 1 or labels.shape != times.shape or labels.numel() == 0:
+        raise ValueError('Mixed grouping requires nonempty, aligned labels/timesteps.')
+    if n_timesteps < 2 or times.min() < 0 or times.max() >= n_timesteps:
+        raise ValueError('Mixed grouping requires at least two valid generation states.')
+    classes, counts = labels.unique(sorted=True, return_counts=True)
+    if not torch.all(counts == counts[0]):
+        raise ValueError('Mixed grouping requires equal samples per class.')
+    if any(times[labels == c].unique().numel() != 1 for c in classes):
+        raise ValueError('Mixed grouping requires each class to have one generation state.')
+    source_classes = [labels[times == t].unique() for t in range(n_timesteps)]
+    per_state = source_classes[0].numel()
+    if per_state < 2 or any(cs.numel() != per_state for cs in source_classes):
+        raise ValueError('Mixed grouping requires equal class counts (>= 2) per state.')
+    destinations = torch.randperm(n_timesteps, generator=generator)
+    groups = torch.empty_like(times)
+    for source, cs in enumerate(source_classes):
+        cs = cs[torch.randperm(per_state, generator=generator)]
+        for rank, c in enumerate(cs):
+            groups[labels == c] = destinations[(source + rank) % n_timesteps]
+    return groups.to(device)
 
 
 def sample_relation_weights(

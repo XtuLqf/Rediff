@@ -1,16 +1,100 @@
-# Time-aware multi-granularity relation consistency for ZeroDiff
+# DS-ReG / Time-aware relation consistency for ZeroDiff
 
-On `codex/ds-reg`, this file describes the inherited time-aware v1.07.3
-implementation. The proposed DS-ReG modules, diagnostic extensions, and revised
-contribution statements are in [DS_REG_DESIGN.md](DS_REG_DESIGN.md); they are
-research targets, not changes already implemented in the training code.
+On `codex/ds-reg`, v1.02 implements module two, State-Matched Dual-Granularity
+Alignment (SDGA), alongside the inherited `legacy` objective. The remaining
+research targets and contribution statements are in [DS_REG_DESIGN.md](DS_REG_DESIGN.md).
+Classification improvements and new calibration/reweighting designs remain unverified.
 
-This branch keeps the original DFG data path, calibrates the stable relation
-space from `exp/vsra`, and coordinates semantic and contrastive topology at
-matched diffusion timesteps.
+Calibration and D updates retain their ordinary real minibatches. An optional
+P×K minibatch supplies all terms in a single G update. The relation projectors
+are calibrated before this minibatch is selected, then frozen during G's update.
 
 For environment setup and copyable experiment commands, see
 [SERVER_RUNBOOK.md](SERVER_RUNBOOK.md). This document covers method details only.
+
+## Implemented SDGA objective (v1.02)
+
+Select `--rel_objective sdga --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0`.
+Incompatible settings fail early. Module three's reliability weighting is not
+applied to this objective.
+
+For each relation group `b`, compare different-class pairs against semantic
+attributes and same-class, distinct-instance pairs against projected PaCo
+features. Normalize student and teacher distances separately on the selected
+pairs, compute the mean Smooth L1 loss within each block, and then use
+
+```text
+L_SDGA = rel_dist_ratio * (lambda_C * mean_valid_b L_C(b)
+                         + lambda_I * mean_valid_b L_I(b))
+L_G = L_ZeroDiff + gamma_rel * L_SDGA
+```
+
+The student normalization stays differentiable; teacher geometry is detached.
+Empty blocks do not enter the corresponding granularity's average. All-empty
+cases produce a differentiable zero. A block with one unordered edge (two
+ordered pairs) is retained and flagged as degenerate, since its separately
+normalized distance loss cannot carry useful shape information. This flag does
+not detect every possible geometric degeneracy or collapsed representation.
+
+`rel_topology_norm=timestep` normalizes inside each relation block; `global`
+is an ablation pooling the selected pairs across blocks. In `matched` mode a
+block is the actual generation timestep `t`, whose noisy input has signal
+`alpha_bar[t+1]`. In `mixed` mode a block is a relation group, not a timestep.
+
+The inherited fixed objective averages over pairs. SDGA averages over valid
+states. With equal per-state pair counts they are mathematically equal; a
+refactor alone is not evidence of a new performance gain.
+
+### Sampling and controlled ablations
+
+- `g_batch_mode=random` reuses the final D batch. `pk` caches eligible class
+  indices from the actual training split, samples P different classes and K
+  different examples per class, and reports excluded classes with fewer than K
+  samples. Insufficient eligible classes cause an error; no repeated-row fallback.
+- P×K must equal batch size, P must be divisible by `n_T`, and the PK configuration
+  requires at least three classes per state and K≥2. With explicit `class_group`,
+  P=16, K=4, T=4 gives four classes and 16 examples per state: 192 ordered class
+  pairs and 48 ordered instance pairs per state (768/192 total).
+- `g_timestep_policy=auto` keeps historical behavior; `independent` and
+  `class_group` are explicit policies that also work when `gamma_rel=0`.
+  PK alone does not enable class grouping; the main commands specify both.
+- `rel_pair_grouping=matched` uses the actual G timestep. `mixed` requires SDGA,
+  PK, explicit class grouping and at least two states. It redistributes whole
+  classes across equally sized relation blocks, with multiple true generation
+  states in every block. Neither noisy inputs nor G's timestep condition changes.
+- Mixed groups preserve every class's within-class pairs. Cross-class comparisons
+  now mix generation states; instance pairs still share one true state, while
+  their block normalization pools different classes/states. This is a test of
+  the overall grouping design, not separate proof of both granularities' causal
+  contributions.
+- `rel_generator_class_weight` / `rel_generator_instance_weight` affect G only
+  and otherwise inherit `rel_class_weight` / `rel_instance_weight`. Existing
+  coefficients still control calibration. Setting both G coefficients to zero
+  with `gamma_rel=1` keeps calibration active for the primary control.
+
+Private batch, timestep and grouping RNG streams prevent mixed grouping from
+shifting subsequent sampling/noise draws. Full checkpoints save these streams
+and validate relation plus training settings. Old checkpoints acquire only
+legacy defaults and cannot silently resume as SDGA.
+
+### Outputs and limits
+
+New sampling/objective/coefficient configurations require `--run_dir` to avoid
+overwriting experiments. The directory contains `config.json` (including seed,
+DRG path and SHA-256), `train.log`, short best-model filenames and
+`dfg_training_last.tar`. Existing nonempty directories require explicit resume.
+
+`SDGA blocks:` records include per-block losses, pair counts, sample/class
+coverage, validity and degeneracy frequencies, raw distance scales, actual
+generation-state composition, and signal retention. Statistics are detached
+and averaged over G updates in each epoch; an empty block contributes zero to
+its logged per-block loss, with the validity frequency identifying missing
+coverage. The optimized loss averages only valid blocks on each update.
+
+RSC calibration math, GSR weighting math, the clean baseline diagnostic and
+classification/model-selection protocol are unchanged. SDGA models must not be
+sent to `diagnostics.run_baseline`; a common method-diagnostic entrypoint is
+still future work. The following sections describe the inherited legacy path.
 
 ## Stable terminal relation space
 

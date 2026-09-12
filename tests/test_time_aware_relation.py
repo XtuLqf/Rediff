@@ -1,4 +1,20 @@
 import torch
+import ast
+import io
+import hashlib
+import json
+import os
+from pathlib import Path
+import random
+import runpy
+import sys
+
+import numpy as np
+import pytest
+
+from datasets.image_util import DATA_LOADER
+from relation.topology import sdga_pair_losses
+from relation.timestep_schedule import mixed_relation_groups
 
 from diagnostics.relation_metrics import class_relation_loss, instance_relation_loss
 from relation.timestep_schedule import (
@@ -187,3 +203,291 @@ def test_static_and_time_aware_losses_use_a_convex_budget():
     time_losses = time_only(generated, semantic, contrastive, labels, timesteps)
     assert time_losses["legacy_total"].item() == 0.0
     assert torch.allclose(time_losses["total"], time_losses["pair_total"])
+
+
+@pytest.mark.parametrize('sizes', [(6, 6), (6, 9)])
+def test_sdga_equal_state_reduction_and_legacy_pair_reduction(sizes):
+    torch.manual_seed(23)
+    labels = torch.arange(sum(sizes) // 3).repeat_interleave(3)
+    groups = torch.cat([torch.full((n,), t, dtype=torch.long) for t, n in enumerate(sizes)])
+    student, semantic, con = [torch.randn(sum(sizes), 5) for _ in range(3)]
+    blocks = sdga_pair_losses(student, semantic, con, labels, groups, 2)
+    old = time_aware_pair_losses(student, semantic, con, labels, groups,
+                                torch.ones(sum(sizes)), torch.ones(sum(sizes)), topology_norm='timestep')
+    for name in ('class', 'instance'):
+        # Independently evaluate each state's data with the existing diagnostic.
+        metric = class_relation_loss if name == 'class' else instance_relation_loss
+        teacher = semantic if name == 'class' else con
+        expected = torch.stack([metric(student[groups == t], teacher[groups == t], labels[groups == t])
+                                for t in range(2)])
+        assert torch.allclose(blocks[name], expected.mean(), atol=1e-6)
+        counts = blocks[name + '_pair_count']
+        assert torch.allclose(old[name], (expected * counts).sum() / counts.sum(), atol=1e-6)
+        if sizes[0] == sizes[1]:
+            assert torch.allclose(blocks[name], old[name], atol=1e-6)
+        else:
+            assert not torch.allclose(blocks[name], old[name], atol=1e-6)
+
+
+def test_sdga_empty_blocks_and_single_edge_have_safe_gradients():
+    student = torch.randn(2, 4, requires_grad=True)
+    teacher = torch.randn(2, 4, requires_grad=True)
+    # Two isolated states have no relation edges of either granularity.
+    empty = sdga_pair_losses(student, teacher, teacher, torch.tensor([0, 1]), torch.tensor([0, 1]), 3)
+    assert empty['class'].item() == empty['instance'].item() == 0
+    (empty['class'] + empty['instance']).backward()
+    assert torch.equal(student.grad, torch.zeros_like(student))
+    assert teacher.grad is None
+    for labels, name in [(torch.tensor([0, 1]), 'class'), (torch.tensor([0, 0]), 'instance')]:
+        single = sdga_pair_losses(student, teacher, teacher, labels, torch.zeros(2, dtype=torch.long), 3)
+        assert single[name + '_degenerate'].tolist() == [True, False, False]
+        assert single[name + '_pair_count'].tolist() == [2, 0, 0]
+        assert single[name].item() == pytest.approx(0, abs=1e-6)
+
+
+def test_sdga_skips_empty_states_and_differentiates_student_normalization():
+    torch.manual_seed(37)
+    student = torch.randn(6, 4, dtype=torch.double, requires_grad=True)
+    teacher = torch.randn(6, 4, dtype=torch.double, requires_grad=True)
+    labels = torch.arange(3).repeat_interleave(2)
+    groups = torch.zeros(6, dtype=torch.long)
+    result = sdga_pair_losses(student, teacher, teacher, labels, groups, 4)
+    assert torch.allclose(result['class'], class_relation_loss(student, teacher, labels))
+    assert torch.allclose(result['instance'], instance_relation_loss(student, teacher, labels))
+    assert torch.autograd.gradcheck(
+        lambda x: sdga_pair_losses(x, teacher, teacher, labels, groups, 4)['class'], (student,),
+    )
+    (result['class'] + result['instance']).backward()
+    assert student.grad.norm() > 0 and torch.isfinite(student.grad).all()
+    assert teacher.grad is None
+
+
+@pytest.mark.parametrize('objective,eta', [('legacy', 0), ('legacy', 1), ('sdga', 1)])
+def test_generator_coefficients_preserve_calibration_and_frozen_projector_gradients(objective, eta):
+    torch.manual_seed(43)
+    common = dict(n_timesteps=2, visual_dim=4, contrastive_dim=4, projection_dim=3,
+                  objective=objective, time_pair_weight=eta, time_mode='fixed', time_strength=0)
+    enabled = TimeAwareVSRA(**common)
+    disabled = TimeAwareVSRA(**common, generator_class_weight=0, generator_instance_weight=0)
+    disabled.load_state_dict(enabled.state_dict())
+    x = torch.randn(12, 4, requires_grad=True)
+    semantic, con = torch.randn(12, 3), torch.randn(12, 4, requires_grad=True)
+    labels = torch.arange(6).repeat_interleave(2)
+    groups = torch.arange(2).repeat_interleave(6)
+    assert torch.equal(enabled.calibration_losses(x, semantic, con)['total'],
+                       disabled.calibration_losses(x, semantic, con)['total'])
+    assert disabled(x, semantic, con, labels, groups)['total'].item() == 0
+    for parameter in enabled.parameters():
+        parameter.requires_grad_(False)
+    enabled(x, semantic, con, labels, groups)['total'].backward()
+    assert x.grad.norm() > 0 and con.grad is None
+    assert all(p.grad is None for p in enabled.parameters())
+
+
+def synthetic_data(counts, visual_dim=4):
+    data = DATA_LOADER.__new__(DATA_LOADER)
+    data.train_label = torch.repeat_interleave(torch.arange(len(counts)), torch.tensor(counts))
+    data.ntrain = data.train_label.numel()
+    # First visual coordinate uniquely identifies the sampled training row.
+    data.train_feature = torch.randn(data.ntrain, visual_dim)
+    data.train_feature[:, 0] = torch.arange(data.ntrain)
+    data.train_paco = torch.randn(data.ntrain, 2048)
+    data.attribute = torch.randn(len(counts), 4)
+    data.seenclasses = torch.arange(len(counts))
+    data.unseenclasses = torch.empty(0, dtype=torch.long)
+    return data
+
+
+def test_pk_sampling_eligibility_uniqueness_and_rng_resume():
+    data = synthetic_data([7] * 20 + [3])
+    assert data.prepare_pk_sampler(16, 4) == {'eligible_classes': 20, 'excluded_classes': 1}
+    rng = torch.Generator().manual_seed(71)
+    state = rng.get_state()
+    original_global_state = torch.get_rng_state()
+    first = data.next_seen_pk_batch(rng)
+    assert torch.equal(original_global_state, torch.get_rng_state())
+    assert first[0][:, 0].unique().numel() == 64
+    assert torch.equal(first[-1].unique(return_counts=True)[1], torch.full((16,), 4))
+    rng.set_state(state)
+    assert all(torch.equal(a, b) for a, b in zip(first, data.next_seen_pk_batch(rng)))
+    with pytest.raises(ValueError, match='only 20 available'):
+        data.prepare_pk_sampler(21, 4)
+
+
+@pytest.mark.parametrize('n_states,classes_per_state', [(4, 4), (3, 4), (4, 3)])
+def test_mixed_groups_preserve_pair_budget_and_generator_states(n_states, classes_per_state):
+    labels = torch.arange(n_states * classes_per_state).repeat_interleave(4)
+    times = sample_relation_group_timesteps(labels, n_states, torch.Generator().manual_seed(81))
+    original = times.clone()
+    global_state = torch.get_rng_state()
+    groups = mixed_relation_groups(labels, times, n_states, torch.Generator().manual_seed(91))
+    assert torch.equal(times, original) and torch.equal(global_state, torch.get_rng_state())
+    for c in labels.unique():
+        assert groups[labels == c].unique().numel() == 1
+    for t in range(n_states):
+        assert times[groups == t].unique().numel() >= 2
+    features = torch.randn(labels.numel(), 4)
+    matched = sdga_pair_losses(features, features, features, labels, times, n_states)
+    mixed = sdga_pair_losses(features, features, features, labels, groups, n_states)
+    for key in ('class_pair_count', 'instance_pair_count', 'samples_per_block', 'classes_per_block'):
+        assert torch.equal(matched[key], mixed[key])
+    if n_states == classes_per_state == 4:
+        assert mixed['class_pair_count'].tolist() == [192] * 4
+        assert mixed['instance_pair_count'].tolist() == [48] * 4
+
+
+def parse_options(monkeypatch, *arguments):
+    monkeypatch.setattr(sys, 'argv', ['config_zerodiff.py', *arguments])
+    return runpy.run_path(str(Path(__file__).resolve().parents[1] / 'config_zerodiff.py'))['opt']
+
+
+@pytest.mark.parametrize('arguments', [
+    ['--rel_objective', 'sdga'],
+    ['--g_batch_mode', 'pk', '--g_pk_samples', '3'],
+    ['--g_batch_mode', 'pk', '--g_pk_classes', '8', '--g_pk_samples', '8'],
+    ['--rel_pair_grouping', 'mixed'],
+    ['--rel_generator_class_weight', 'nan'],
+])
+def test_invalid_experiment_settings_fail_early(monkeypatch, arguments):
+    with pytest.raises(SystemExit):
+        parse_options(monkeypatch, *arguments)
+
+
+@pytest.mark.parametrize('dataset', ['awa2', 'cub', 'sun'])
+def test_launcher_accepts_explicit_drg_outside_default_directory(monkeypatch, tmp_path, dataset):
+    checkpoint = tmp_path / 'custom_drg.tar'
+    checkpoint.touch()
+    launcher = Path(__file__).resolve().parents[1] / 'scripts' / f'run_{dataset}_zerodiff_DFG_train.py'
+    monkeypatch.setattr(sys, 'argv', [str(launcher), '--netR_model_path', str(checkpoint), '--nepoch', '1'])
+    calls = []
+    monkeypatch.setattr('subprocess.run', lambda command, **kwargs: calls.append(command))
+    runpy.run_path(str(launcher))
+    assert calls[0][-2:] == ['--netR_model_path', str(checkpoint)]
+    assert calls[0][-4:-2] == ['--nepoch', '1']
+
+
+def training_namespace(options):
+    """Load real trainer definitions without executing its dataset/GPU entrypoint."""
+    import zerodiff_tools
+    path = Path(__file__).resolve().parents[1] / 'zerodiff_DFG_train.py'
+    tree = ast.parse(path.read_text(encoding='utf-8'))
+    definitions = ast.Module(body=[node for node in tree.body
+                                  if isinstance(node, (ast.FunctionDef, ast.ClassDef))], type_ignores=[])
+    scope = dict(torch=torch, optim=torch.optim, np=np, random=random, os=os, json=json,
+                 opt=options, zerodiff_tools=zerodiff_tools, TimeAwareVSRA=TimeAwareVSRA,
+                 sample_relation_group_timesteps=sample_relation_group_timesteps,
+                 mixed_relation_groups=mixed_relation_groups, logger=io.StringIO(),
+                 new_relation_behavior=True, BEST_STATE_NAMES=(),
+                 relation_run_config={'objective': 'sdga'}, training_run_config={'seed': 103})
+    exec(compile(definitions, str(path), 'exec'), scope)
+    scope['relation_run_config'] = scope['normalized_relation_config'](scope['relation_run_config'])
+    return scope
+
+
+@pytest.mark.parametrize('grouping', ['matched', 'mixed'])
+def test_real_training_step_and_full_resume_are_identical(monkeypatch, tmp_path, grouping):
+    options = parse_options(monkeypatch, '--dataset', 'AWA2', '--gamma_rel', '1',
+                            '--rel_objective', 'sdga', '--rel_time_mode', 'fixed', '--rel_time_strength', '0',
+                            '--g_batch_mode', 'pk', '--g_timestep_policy', 'class_group',
+                            '--rel_pair_grouping', grouping, '--manualSeed', '103',
+                            '--resSize', '8', '--attSize', '4', '--noiseSize', '4', '--dim_t', '4',
+                            '--ndh', '16', '--encoder_layer_sizes', '8', '16',
+                            '--decoder_layer_sizes', '16', '8', '--rel_proj_dim', '8')
+    options.cuda = False
+    options.critic_iter = 1
+    torch.manual_seed(103)
+    torch.set_num_threads(1)
+    data = synthetic_data([8] * 20, visual_dim=8)
+    data.train_feature = torch.sigmoid(data.train_feature)
+    scope = training_namespace(options)
+    scope.update(data=data, input_res=torch.empty(64, 8), input_con=torch.empty(64, 2048),
+                 input_att=torch.empty(64, 4), input_label=torch.empty(64, dtype=torch.long),
+                 sampleTestSeen=lambda: data.next_seen_batch(64)[:3])
+    drg = scope['zerodiff_tools'].DRG_Generator(options)
+    drg_path = tmp_path / 'drg.tar'
+    torch.save({'state_dict_G_con': drg.state_dict()}, drg_path)
+
+    def new_model():
+        return scope['ZERODIFF'](data, 4, (0.1, 20), data.seenclasses, data.unseenclasses,
+                                 data.attribute, str(drg_path), device='cpu')
+
+    model = new_model()
+    calibration_inputs, generator_inputs = [], []
+    model.time_aware_vsra.visual_projector.register_forward_pre_hook(
+        lambda module, args: calibration_inputs.append(args[0].detach().clone()))
+    model.netE.register_forward_pre_hook(lambda module, args: generator_inputs.append(args[0].detach().clone()))
+    model()
+    # D's batch is calibrated, then one newly sampled batch is used by E/G.
+    assert torch.equal(calibration_inputs[0], generator_inputs[0])
+    assert not torch.equal(generator_inputs[0], generator_inputs[1])
+    summary = model.relation_block_summary(0)
+    assert summary['class_pair_count'] == [192] * 4
+    assert summary['instance_pair_count'] == [48] * 4
+    assert summary['class_valid'] == summary['instance_valid'] == [1] * 4
+    assert all(not tensor.requires_grad for tensor in model.relation_block_sums.values())
+    model.init_recorder()
+    checkpoint = scope['save_training_state'](model, str(tmp_path / 'dfg'), 0)
+    expected_losses = [x.detach().clone() for x in model()]
+    expected_weights = {key: value.clone() for key, value in model.state_dict().items()}
+    restored = new_model()
+    assert scope['load_training_state'](restored, checkpoint) == 1
+    resumed_losses = restored()
+    for expected, resumed in zip(expected_losses, resumed_losses):
+        assert torch.equal(expected, resumed.detach())
+    for key, expected in expected_weights.items():
+        assert torch.equal(expected, restored.state_dict()[key]), key
+    scope['training_run_config']['seed'] = 999
+    with pytest.raises(ValueError, match='training configuration differs'):
+        scope['load_training_state'](restored, checkpoint)
+
+
+def test_old_checkpoint_defaults_do_not_adopt_sdga_settings(monkeypatch):
+    scope = training_namespace(parse_options(monkeypatch))
+    normalized = scope['normalized_relation_config']({'class_weight': 2, 'instance_weight': 3})
+    assert normalized['objective'] == 'legacy'
+    assert normalized['generator_class_weight'] == 2 and normalized['generator_instance_weight'] == 3
+    assert normalized['g_timestep_policy'] == 'auto' and normalized['g_batch_mode'] == 'random'
+
+
+def test_run_directory_metadata_collision_and_resume_validation(monkeypatch, tmp_path):
+    checkpoint = tmp_path / 'drg.tar'
+    checkpoint.write_bytes(b'fixed DRG identity')
+    options = parse_options(monkeypatch, '--manualSeed', '9182', '--gamma_rel', '1',
+                            '--rel_objective', 'sdga', '--rel_time_mode', 'fixed', '--rel_time_strength', '0',
+                            '--run_dir', str(tmp_path / 'experiment'), '--netR_model_path', str(checkpoint))
+    options.cuda = False
+    monkeypatch.chdir(tmp_path)
+    path = Path(__file__).resolve().parents[1] / 'zerodiff_DFG_train.py'
+    nodes = ast.parse(path.read_text(encoding='utf-8')).body
+    # Execute the actual startup path, stopping before dataset/model allocation.
+    start = next(i for i, node in enumerate(nodes) if isinstance(node, ast.Assign)
+                 and any(isinstance(target, ast.Name) and target.id == 'folder_name' for target in node.targets))
+    end = next(i for i, node in enumerate(nodes) if isinstance(node, ast.Assign)
+               and any(isinstance(target, ast.Name) and target.id == 'data' for target in node.targets))
+    definitions = training_namespace(options)
+    definitions.update(cudnn=torch.backends.cudnn, hashlib=hashlib)
+    startup = compile(ast.Module(body=nodes[start:end], type_ignores=[]), str(path), 'exec')
+    exec(startup, definitions)
+    config_path = Path(options.run_dir) / 'config.json'
+    metadata = json.loads(config_path.read_text(encoding='utf-8'))
+    assert metadata['training']['manualSeed'] == 9182
+    assert metadata['training']['drg_sha256'] == hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    assert definitions['model_save_name'] == str(Path(options.run_dir) / 'dfg')
+    original_config = config_path.read_bytes()
+    with pytest.raises(FileExistsError, match='not empty'):
+        exec(startup, definitions)
+    assert config_path.read_bytes() == original_config
+    options.resume_training = str(Path(options.run_dir) / 'dfg_training_last.tar')
+    options.nepoch += 10
+    exec(startup, definitions)  # Extending the budget does not change the objective.
+    torch.save({'training_config': metadata['training']}, options.resume_training)
+    options.manualSeed = None
+    exec(startup, definitions)
+    assert options.manualSeed == 9182
+    options.rel_generator_class_weight = 0
+    with pytest.raises(ValueError, match='configuration differs'):
+        exec(startup, definitions)
+    options.rel_generator_class_weight = 1
+    checkpoint.write_bytes(b'a different DRG at the same path')
+    with pytest.raises(ValueError, match='configuration differs'):
+        exec(startup, definitions)

@@ -1,5 +1,6 @@
 #author: ZihanYe
 import argparse
+import math
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', default='FLO', help='FLO')
@@ -53,6 +54,18 @@ parser.add_argument("--gamma_CON_sample", type=float, default=0.0)
 parser.add_argument("--gamma_CON_step", type=float, default=0.0)
 parser.add_argument("--factor_dist", type=float, default=1.0)
 ### time-aware VSRA (disabled by default)
+parser.add_argument('--rel_objective', choices=['legacy', 'sdga'], default='legacy')
+parser.add_argument('--rel_generator_class_weight', type=float, default=None,
+                    help='G-only class coefficient; omitted inherits rel_class_weight')
+parser.add_argument('--rel_generator_instance_weight', type=float, default=None,
+                    help='G-only instance coefficient; omitted inherits rel_instance_weight')
+parser.add_argument('--g_batch_mode', choices=['random', 'pk'], default='random')
+parser.add_argument('--g_pk_classes', type=int, default=16)
+parser.add_argument('--g_pk_samples', type=int, default=4)
+parser.add_argument('--g_timestep_policy', choices=['auto', 'independent', 'class_group'], default='auto',
+                    help='auto preserves legacy; explicit policies are independent of gamma_rel')
+parser.add_argument('--rel_pair_grouping', choices=['matched', 'mixed'], default='matched',
+                    help='mixed regroups whole classes without changing generator timesteps')
 parser.add_argument("--gamma_rel", type=float, default=0.0,
                     help="overall time-aware VSRA weight; 0 preserves the baseline")
 parser.add_argument("--rel_class_weight", type=float, default=1.0,
@@ -91,6 +104,8 @@ parser.add_argument('--ddpmbeta2', type=float, default=20)
 parser.add_argument("--netR_model_path", default=None)
 parser.add_argument("--resume_training", default=None,
                     help="full DFG training-state checkpoint to resume")
+parser.add_argument('--run_dir', default=None,
+                    help='isolated DFG output directory with short filenames')
 parser.add_argument("--training_checkpoint_interval", type=int, default=5,
                     help="save recoverable training state every N epochs; 0 disables")
 
@@ -121,4 +136,27 @@ if not 0.0 <= opt.rel_time_pair_weight <= 1.0:
     parser.error("rel_time_pair_weight must be in [0, 1]")
 if opt.training_checkpoint_interval < 0:
     parser.error("training_checkpoint_interval must be non-negative")
+for name, fallback in [('rel_generator_class_weight', opt.rel_class_weight),
+                       ('rel_generator_instance_weight', opt.rel_instance_weight)]:
+    value = getattr(opt, name)
+    value = fallback if value is None else value
+    if not math.isfinite(value) or value < 0:
+        parser.error(name + ' must be finite and non-negative')
+    setattr(opt, name, value)
+if opt.n_T < 1 or opt.batch_size < 1:
+    parser.error('n_T and batch_size must be positive')
+if opt.g_batch_mode == 'pk':
+    if opt.g_pk_classes < 1 or opt.g_pk_samples < 2:
+        parser.error('PK requires P >= 1 and K >= 2 distinct samples')
+    if opt.g_pk_classes * opt.g_pk_samples != opt.batch_size:
+        parser.error('PK requires g_pk_classes * g_pk_samples == batch_size')
+    if opt.g_pk_classes % opt.n_T or opt.g_pk_classes // opt.n_T < 3:
+        parser.error('PK requires P divisible by n_T and at least 3 classes per state')
+if opt.rel_objective == 'sdga':
+    if opt.rel_time_pair_weight != 1 or opt.rel_time_mode != 'fixed' or opt.rel_time_strength != 0:
+        parser.error('SDGA requires rel_time_pair_weight=1, rel_time_mode=fixed, rel_time_strength=0')
+if opt.rel_pair_grouping == 'mixed':
+    if (opt.rel_objective != 'sdga' or opt.g_batch_mode != 'pk'
+            or opt.g_timestep_policy != 'class_group' or opt.n_T < 2):
+        parser.error('mixed requires SDGA, PK, explicit class_group and n_T >= 2')
 

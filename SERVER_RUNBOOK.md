@@ -1,8 +1,157 @@
 # Linux 服务器实验手册
 
-当前先在 AWA2 跑 **3 个单种子完整实验**看效果，需要时再补 3 个对照。本文直接调用已有启动器，不需要新建 Python 或 Shell 文件。方法原理和消融解释统一见 [RELATION_CONSISTENCY.md](RELATION_CONSISTENCY.md)，两份文档分别负责原理与操作。
+第 1.02 版先在 AWA2 跑第 0 节的 **3 个单种子完整实验**验收模块二，后续再补生成器类别/实例项和归一化消融。第 3–7 节保留第 1.07.3 版 legacy 路径的操作记录。本文直接调用已有启动器，不需要新建 Python 或 Shell 文件。方法原理统一见 [RELATION_CONSISTENCY.md](RELATION_CONSISTENCY.md)。
 
 所有命令在仓库根目录的 **Bash** 中执行。基线和方法使用同一代码版本，不必为诊断切换分支。
+
+## 0. 第 1.02 版：模块二 SDGA 验收
+
+先按第 1–2 节准备好环境、AWA2 数据和同一份 DRG。下面直接使用 AWA2 启动器；显式指定的 DRG 路径现在优先于默认目录查找。
+
+### 0.1 固定配置
+
+在同一个 Bash 终端执行一次，将 `DRG` 替换为实际文件：
+
+```bash
+export CUDA_VISIBLE_DEVICES=0
+DRG='out/AWA2/替换为实际DRG文件名.tar'
+test -f "$DRG" && sha256sum "$DRG"
+git branch --show-current
+git rev-parse HEAD
+
+COMMON=(
+  --netR_model_path "$DRG" --manualSeed 9182
+  --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5
+  --batch_size 64 --n_T 4
+  --gamma_rel 1 --rel_objective sdga
+  --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1
+  --rel_proj_dim 512 --rel_dist_ratio 1
+  --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0
+  --rel_topology_norm timestep
+  --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4
+  --g_timestep_policy class_group
+)
+```
+
+固定为 300 epochs、每 5 epochs 评估、合成数量沿用启动器的 5400。模块三关闭。原校准距离/角度配置保留，G 的 SDGA 只使用距离关系。三个实验均采用相同的 P×K 生成器批次、时间步策略和校准系数。
+
+### 0.2 依次运行三组
+
+**S0：保留校准，关闭 G 的类别和实例关系约束。** 这是当前核心对照；`gamma_rel` 保持 1，不能改成 0，否则校准也会关闭。
+
+```bash
+python scripts/run_awa2_zerodiff_DFG_train.py "${COMMON[@]}" \
+  --rel_pair_grouping matched \
+  --rel_generator_class_weight 0 --rel_generator_instance_weight 0 \
+  --run_dir out/ds_reg/AWA2/s0_control_seed9182
+```
+
+**S1：SDGA 同状态双粒度对齐。**
+
+```bash
+python scripts/run_awa2_zerodiff_DFG_train.py "${COMMON[@]}" \
+  --rel_pair_grouping matched \
+  --rel_generator_class_weight 1 --rel_generator_instance_weight 1 \
+  --run_dir out/ds_reg/AWA2/s1_matched_seed9182
+```
+
+**S2：SDGA 混合状态对照。** 整类重新分组，每组类别数、样本数及有效对数不变，生成器时间步和带噪输入仍然正确。
+
+```bash
+python scripts/run_awa2_zerodiff_DFG_train.py "${COMMON[@]}" \
+  --rel_pair_grouping mixed \
+  --rel_generator_class_weight 1 --rel_generator_instance_weight 1 \
+  --run_dir out/ds_reg/AWA2/s2_mixed_seed9182
+```
+
+先看 S1−S0 的关系约束收益，再看 S1−S2 的状态组织收益。S0 不是原始 ZeroDiff：它保留关系投影器校准、P×K 生成器采样及分组时间步。S2 的跨类对跨状态，类内对仍在同一真实状态；类内项改变的是关系块组成及归一化尺度。不能把 S1−S2 单独解读为两个粒度各自的状态效应。
+
+### 0.3 验收日志与手动记录
+
+每个目录保存 `config.json`、`train.log`、`dfg_training_last.tar`，以及产生最佳结果时保存的 `dfg_gzsl_VCS.tar` / `dfg_zsl_VCS.tar` 等模型。`config.json` 包含有效配置、种子、DRG 路径和 SHA-256。重复运行请使用新目录；已有非空目录只允许显式恢复。
+
+```bash
+for RUN in s0_control_seed9182 s1_matched_seed9182 s2_mixed_seed9182; do
+  LOG="out/ds_reg/AWA2/$RUN/train.log"
+  echo "$RUN"
+  grep '^SDGA blocks:' "$LOG" | tail -n 1
+  grep -E 'best GZSL \(VCS\)|best ZSL \(VCS\)' "$LOG" | tail -n 2
+done
+```
+
+数值正确性的预期：
+
+| 日志字段 | 三组预期（每个关系块） |
+| --- | --- |
+| `samples_per_block` / `classes_per_block` | `[16,16,16,16]` / `[4,4,4,4]` |
+| `class_pair_count` / `instance_pair_count` | `[192,192,192,192]` / `[48,48,48,48]`，有序对 |
+| `class_valid` / `instance_valid` | 均为 `[1,1,1,1]`，表示该 epoch 所有 G 更新都有有效对 |
+| `class_degenerate` / `instance_degenerate` | 均为 `[0,0,0,0]`，仅标记单条无向边的退化块 |
+| S0 的关系 `total` | 0；原始分块损失及校准损失仍然正常记录 |
+| S0/S1 的 `generation_state_counts` | 4×4 对角矩阵，对角为 16 |
+| S2 的 `generation_state_counts` | 4×4 矩阵，每项为 4 |
+
+`*_loss_per_block`、`*_student_scale`、`*_teacher_scale` 用于观察各块损失与原始尺度；`signal_retention_by_generation_state` 记录实际 `alpha_bar[t+1]`。S2 的 `signal_retention_mean` 是混合组内平均信号，不代表存在一个对应的真实时间步。日志数值按 epoch 内 G 更新取平均，已脱离梯度图。
+
+填写下表并附上 git 提交、DRG SHA-256；U/S/H 取同一行 `best GZSL (VCS)`，T1 取独立的 `best ZSL (VCS)`。代码输出为小数，统一乘 100 后可填百分数：
+
+| 实验 | 种子 | GZSL U | GZSL S | GZSL H | ZSL T1 | 有效对符合预期 | 用时/异常 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| S0 关闭 G 关系 | 9182 | 待填 | 待填 | 待填 | 待填 | 待填 | 待填 |
+| S1 同状态 SDGA | 9182 | 待填 | 待填 | 待填 | 待填 | 待填 | 待填 |
+| S2 混合状态 | 9182 | 待填 | 待填 | 待填 | 待填 | 待填 | 待填 |
+
+保留负结果。不要从 V/C/VC/VS/VCS 中择最高值作为主表。原评估沿用测试集逐轮最优，并同时比较普通/渐进生成；本版没有新增独立验证集选择协议。单种子结果只用于当前效果筛查，不能据此宣称机制成立或达到 SOTA。
+
+### 0.4 可选消融：首轮之后再运行
+
+不改变校准，只关闭一个生成器项：
+
+```bash
+# 仅类别关系
+python scripts/run_awa2_zerodiff_DFG_train.py "${COMMON[@]}" \
+  --rel_pair_grouping matched \
+  --rel_generator_class_weight 1 --rel_generator_instance_weight 0 \
+  --run_dir out/ds_reg/AWA2/s3_class_only_seed9182
+
+# 仅实例关系
+python scripts/run_awa2_zerodiff_DFG_train.py "${COMMON[@]}" \
+  --rel_pair_grouping matched \
+  --rel_generator_class_weight 0 --rel_generator_instance_weight 1 \
+  --run_dir out/ds_reg/AWA2/s4_instance_only_seed9182
+
+# 跨状态共用归一化尺度；同状态掩码和等块聚合保持不变
+python scripts/run_awa2_zerodiff_DFG_train.py "${COMMON[@]}" \
+  --rel_pair_grouping matched --rel_topology_norm global \
+  --rel_generator_class_weight 1 --rel_generator_instance_weight 1 \
+  --run_dir out/ds_reg/AWA2/s5_global_norm_seed9182
+```
+
+不要用 `rel_class_weight=0` / `rel_instance_weight=0` 代替以上 G-only 系数，那会同时改变校准。随机采样对照可用 S1 命令覆盖 `--g_batch_mode random` 并换新目录；但比较采样收益时也需要给 S0 做同样覆盖。等覆盖时 legacy fixed 与 SDGA 的聚合数学等价，不把它当作应当产生提升的独立创新消融。
+
+### 0.5 中断恢复
+
+重新设置同一份 `COMMON`，保持所有训练参数不变，仅添加恢复路径。以 S1 为例：
+
+```bash
+python scripts/run_awa2_zerodiff_DFG_train.py "${COMMON[@]}" \
+  --rel_pair_grouping matched \
+  --rel_generator_class_weight 1 --rel_generator_instance_weight 1 \
+  --run_dir out/ds_reg/AWA2/s1_matched_seed9182 \
+  --resume_training out/ds_reg/AWA2/s1_matched_seed9182/dfg_training_last.tar
+```
+
+恢复 S0/S2 时必须使用对应系数、分组和目录。checkpoint 保存网络、优化器、最佳指标、全局 RNG 及 P×K/时间步/混合分组三个独立 RNG；校验配置不一致就报错。可以延长 `nepoch`，不能把 S0 恢复成 S1，也不能直接将旧 legacy 断点改成 SDGA。旧断点仅按 legacy 默认含义兼容。
+
+启用周期保存时，最后一轮也会保存。epoch 从 0 编号，检查 `next_epoch`/恢复日志确定进度。崩溃后会从最近保存的 epoch 重算，追加日志可能包含上次失败区间的重复 epoch；手动记录以恢复后完成的最后一组结果为准，不拼接重复 epoch 当作额外训练次数。不要将最佳模型文件当作完整训练断点。
+
+本地实现验证命令（需要 torch、numpy、scipy、scikit-learn、pytest）：
+
+```bash
+python -m pytest tests/test_time_aware_relation.py -q
+```
+
+第 1.02 版在 Python 3.11 / PyTorch 2.9.1 CPU 环境下通过 29 项检查，覆盖数学归约、梯度、采样、启动器参数、实际 D/校准/G 更新、输出目录保护和恢复一致性；另核对四种 legacy 关系配置及旧采样器与父提交逐值一致，手册 Bash 语法检查通过。这些结果不代替 AWA2 的 GPU 完整实验。原干净基线诊断暂不接受这三组带关系参数的模型。
 
 ## 1. 环境与数据
 
@@ -224,6 +373,6 @@ python "$LAUNCHER" \
   --resume_training "$RESUME"
 ```
 
-恢复其他组时使用各自原命令，不能直接套用 M5。保持 DRG、数据、种子和其他参数不变；当前恢复检查并不验证全部训练配置。
+恢复其他组时使用各自原命令，不能直接套用 M5。第 1.02 版生成的完整断点增加训练配置检查；历史断点没有这些字段时，仅能检查其已保存的关系配置，DRG、数据、种子和其他旧参数仍需手动核对。
 
 不要传入 `gzsl*.tar` 或 `zsl*.tar` 模型选择文件，它们没有完整优化器状态。当前恢复器也兼容 v1.06 的每可见 GPU RNG 列表，并转换为所用设备的 CPU ByteTensor RNG 状态。

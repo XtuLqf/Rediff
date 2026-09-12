@@ -136,6 +136,35 @@ class DATA_LOADER(object):
         return batch_feature, batch_con, batch_att, batch_label
 
 
+    def prepare_pk_sampler(self, classes_per_batch, samples_per_class):
+        """Cache eligible indices from the final training split, without RNG draws."""
+        if classes_per_batch < 1 or samples_per_class < 2:
+            raise ValueError('PK requires P >= 1 and K >= 2.')
+        self.pk_indices = [
+            torch.nonzero(self.train_label == label, as_tuple=False).flatten()
+            for label in self.train_label.unique(sorted=True)
+        ]
+        total = len(self.pk_indices)
+        self.pk_indices = [idx for idx in self.pk_indices if idx.numel() >= samples_per_class]
+        if len(self.pk_indices) < classes_per_batch:
+            raise ValueError(
+                f'PK needs {classes_per_batch} eligible classes with >= {samples_per_class} '
+                f'distinct samples; only {len(self.pk_indices)} available in the training split.'
+            )
+        self.pk_classes = classes_per_batch
+        self.pk_samples = samples_per_class
+        return {'eligible_classes': len(self.pk_indices), 'excluded_classes': total - len(self.pk_indices)}
+
+    def next_seen_pk_batch(self, generator):
+        """Sample P classes and K distinct training rows per class on a private RNG."""
+        chosen = torch.randperm(len(self.pk_indices), generator=generator)[:self.pk_classes]
+        indices = torch.cat([
+            self.pk_indices[c][torch.randperm(self.pk_indices[c].numel(), generator=generator)[:self.pk_samples]]
+            for c in chosen.tolist()
+        ])
+        labels = self.train_label[indices]
+        return self.train_feature[indices], self.train_paco[indices], self.attribute[labels], labels
+
     def next_test_seen_batch(self, seen_batch):
         idx = torch.randperm(self.ntest_seen)[0:seen_batch]
         batch_feature = self.test_seen_feature[idx]

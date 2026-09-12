@@ -3,6 +3,7 @@
 """
 @author: ZihanYe
 """
+import argparse
 import os
 import subprocess
 import sys
@@ -18,7 +19,10 @@ NETR_MODEL_CANDIDATES = [
 	OUT_DIR / 'diffzero_pretrain_100percent_att:att_b:64_lr:0.0005_n_T:4_betas:0.1,20_gamma:ADV:10.0_VAE:1.0_x0:1.0_xt:1.0_dist:0.0_num:1800_zsl.tar',
 ]
 
-NETR_MODEL = next(
+override_parser = argparse.ArgumentParser(add_help=False)
+override_parser.add_argument('--netR_model_path')
+overrides, _ = override_parser.parse_known_args()
+NETR_MODEL = Path(overrides.netR_model_path).expanduser().resolve() if overrides.netR_model_path else next(
 	(candidate for candidate in NETR_MODEL_CANDIDATES if candidate.exists()),
 	None,
 )
@@ -27,6 +31,8 @@ if NETR_MODEL is None:
 		f'No matching AWA2 100% DRG checkpoint found in {OUT_DIR}. '
 		'Please run the AWA2 DRG script first.'
 	)
+if not NETR_MODEL.is_file():
+	raise FileNotFoundError(f'DRG checkpoint does not exist: {NETR_MODEL}')
 
 env = os.environ.copy()
 env['OMP_NUM_THREADS'] = '4'
@@ -52,5 +58,7 @@ command = [
 	'--netR_model_path', str(NETR_MODEL),
 ]
 command.extend(sys.argv[1:])
+# Resolve explicit relative paths before the subprocess changes directory.
+command.extend(['--netR_model_path', str(NETR_MODEL)])
 
 subprocess.run(command, cwd=ROOT, check=True, env=env)
