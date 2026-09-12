@@ -80,7 +80,10 @@ legacy defaults and cannot silently resume as SDGA.
 ### Outputs and limits
 
 New sampling/objective/coefficient configurations require `--run_dir` to avoid
-overwriting experiments. The directory contains `config.json` (including seed,
+overwriting experiments. The AWA2 launcher supplies it automatically for
+`--experiment S0`, `S1`, or `S2`, adding a numbered suffix on a fresh rerun.
+An explicit resume uses the checkpoint directory. CUDA is checked before any
+run outputs are created. The directory contains `config.json` (including seed,
 DRG path and SHA-256), `train.log`, short best-model filenames and
 `dfg_training_last.tar`. Existing nonempty directories require explicit resume.
 

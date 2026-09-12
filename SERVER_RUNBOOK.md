@@ -8,7 +8,34 @@
 
 先按第 1–2 节准备好环境、AWA2 数据和同一份 DRG。下面直接使用 AWA2 启动器；显式指定的 DRG 路径现在优先于默认目录查找。
 
-### 0.1 固定配置
+### 0.1 简单运行：一组一条命令
+
+在仓库根目录执行。启动器会查找已有的 AWA2 DRG；若有多份候选，按源码中的固定候选顺序选择，优先 100% DRG 的 GZSL 文件。启动时显示输出目录，`config.json` 记录实际 DRG 路径和校验值。
+
+```bash
+conda activate rediff
+export CUDA_VISIBLE_DEVICES=0
+python scripts/run_awa2_zerodiff_DFG_train.py --experiment S0
+```
+
+S0 正常跑完后，再分别运行 S1、S2：
+
+```bash
+python scripts/run_awa2_zerodiff_DFG_train.py --experiment S1
+```
+
+```bash
+python scripts/run_awa2_zerodiff_DFG_train.py --experiment S2
+```
+
+三组依旧使用下述相同实验设置，默认 300 epochs。S0 关闭 G 关系约束，S1 同状态对齐，S2 混合状态对照。已有同名目录时自动选择 `_run2`、`_run3` 等新目录，旧日志和模型保留；无需为启动失败的旧目录传入恢复参数。默认候选就是用户已有的 `zerodiff_DRG_..._num:1800_gzsl.tar`；要指定其他 DRG，在命令末尾加 `--netR_model_path '实际路径'`。
+
+CUDA 检查在读取数据和创建输出文件之前执行；失败会直接显示原因，启动器不再重复打印整条参数列表。以下完整参数只在需要修改设置时展开。
+
+### 0.2 完整参数（按需）
+
+<details>
+<summary>展开 COMMON 配置及等价的完整命令；运行第 0.4 节消融前可在这里设置 COMMON</summary>
 
 在同一个 Bash 终端执行一次，将 `DRG` 替换为实际文件：
 
@@ -35,7 +62,7 @@ COMMON=(
 
 固定为 300 epochs、每 5 epochs 评估、合成数量沿用启动器的 5400。模块三关闭。原校准距离/角度配置保留，G 的 SDGA 只使用距离关系。三个实验均采用相同的 P×K 生成器批次、时间步策略和校准系数。
 
-### 0.2 依次运行三组
+**使用完整参数依次运行三组**
 
 **S0：保留校准，关闭 G 的类别和实例关系约束。** 这是当前核心对照；`gamma_rel` 保持 1，不能改成 0，否则校准也会关闭。
 
@@ -66,9 +93,13 @@ python scripts/run_awa2_zerodiff_DFG_train.py "${COMMON[@]}" \
 
 先看 S1−S0 的关系约束收益，再看 S1−S2 的状态组织收益。S0 不是原始 ZeroDiff：它保留关系投影器校准、P×K 生成器采样及分组时间步。S2 的跨类对跨状态，类内对仍在同一真实状态；类内项改变的是关系块组成及归一化尺度。不能把 S1−S2 单独解读为两个粒度各自的状态效应。
 
+</details>
+
 ### 0.3 验收日志与手动记录
 
-每个目录保存 `config.json`、`train.log`、`dfg_training_last.tar`，以及产生最佳结果时保存的 `dfg_gzsl_VCS.tar` / `dfg_zsl_VCS.tar` 等模型。`config.json` 包含有效配置、种子、DRG 路径和 SHA-256。重复运行请使用新目录；已有非空目录只允许显式恢复。
+每个目录保存 `config.json`、`train.log`、`dfg_training_last.tar`，以及产生最佳结果时保存的 `dfg_gzsl_VCS.tar` / `dfg_zsl_VCS.tar` 等模型。`config.json` 包含有效配置、种子、DRG 路径和 SHA-256。短命令自动选择新目录；若手动指定 `--run_dir`，已有非空目录仍只允许显式恢复。
+
+若启动时显示了 `_run2` 等后缀，请将下面 `RUN` 名称改成显示的实际目录名：
 
 ```bash
 for RUN in s0_control_seed9182 s1_matched_seed9182 s2_mixed_seed9182; do
@@ -105,7 +136,7 @@ done
 
 ### 0.4 可选消融：首轮之后再运行
 
-不改变校准，只关闭一个生成器项：
+先展开第 0.2 节设置 `COMMON`。不改变校准，只关闭一个生成器项：
 
 ```bash
 # 仅类别关系
@@ -131,6 +162,15 @@ python scripts/run_awa2_zerodiff_DFG_train.py "${COMMON[@]}" \
 
 ### 0.5 中断恢复
 
+使用短命令启动的 S1 也可简短恢复；将路径替换为实际输出目录（可能包含 `_run2` 等后缀）：
+
+```bash
+python scripts/run_awa2_zerodiff_DFG_train.py --experiment S1 \
+  --resume_training out/ds_reg/AWA2/s1_matched_seed9182/dfg_training_last.tar
+```
+
+此时自动使用断点所在目录。若原来另行指定了种子、DRG、训练设置，恢复时仍须保留那些参数。
+
 重新设置同一份 `COMMON`，保持所有训练参数不变，仅添加恢复路径。以 S1 为例：
 
 ```bash
@@ -151,7 +191,27 @@ python scripts/run_awa2_zerodiff_DFG_train.py "${COMMON[@]}" \
 python -m pytest tests/test_time_aware_relation.py -q
 ```
 
-第 1.02 版在 Python 3.11 / PyTorch 2.9.1 CPU 环境下通过 29 项检查，覆盖数学归约、梯度、采样、启动器参数、实际 D/校准/G 更新、输出目录保护和恢复一致性；另核对四种 legacy 关系配置及旧采样器与父提交逐值一致，手册 Bash 语法检查通过。这些结果不代替 AWA2 的 GPU 完整实验。原干净基线诊断暂不接受这三组带关系参数的模型。
+第 1.02 版及启动修复在 Python 3.11 / PyTorch 2.9.1 CPU 环境下通过 34 项检查，覆盖数学归约、梯度、采样、启动器参数、实际 D/校准/G 更新、输出目录保护和恢复一致性，以及短命令的等价设置、目录避让和 CUDA 失败时不创建输出；另核对四种 legacy 关系配置及旧采样器与第 1.01 版逐值一致，手册 Bash 语法检查通过。这些结果不代替 AWA2 的 GPU 完整实验。原干净基线诊断暂不接受这三组带关系参数的模型。
+
+### 0.6 CUDA 初始化失败的处理
+
+本次服务器反馈：训练报 `Error 804`，同时 `nvidia-smi` 报 `Failed to initialize NVML: Driver/library version mismatch`，NVML 库版本为 `580.178`。这说明需要先修复系统 NVIDIA 驱动与库版本不一致的问题。驱动更新后未重启是可能原因；NVIDIA 文档说明这类情况需要重启完成驱动加载：[官方说明](https://docs.nvidia.com/dgx/dgx-el9-user-guide/upgrading.html)。
+
+确认机器可以重启、其他任务已妥善停止后，由有权限的人执行：
+
+```bash
+sudo reboot
+```
+
+重新连接服务器，先验证 GPU：
+
+```bash
+nvidia-smi
+conda activate rediff
+python -c "import torch; print(torch.zeros(1, device='cuda'))"
+```
+
+两项成功后才启动实验。若重启后 `nvidia-smi` 仍失败，记录 `cat /proc/driver/nvidia/version` 和 `modinfo -F version nvidia` 的输出，再处理内核模块与用户态驱动安装。若 `nvidia-smi` 恢复但 PyTorch 仍失败，再核对加载的 CUDA 库；仅凭 `LD_LIBRARY_PATH` 含 `cuda-12.1/lib64`，不能认定必须重装 PyTorch。启动修复不能替代服务器驱动修复。
 
 ## 1. 环境与数据
 
