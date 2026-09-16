@@ -18,10 +18,13 @@ NETR_MODEL_CANDIDATES = [
 	OUT_DIR / 'zerodiff_DRG_100percent_att:sent_b:64_lr:0.0001_n_T:4_betas:0.1,20_gamma:ADV:1.0_VAE:0.0_x0:1.0_xt:1.0_dist:1.0_num:300_zsl.tar',
 ]
 
-override_parser = argparse.ArgumentParser(add_help=False)
-override_parser.add_argument('--netR_model_path')
-overrides, _ = override_parser.parse_known_args()
-NETR_MODEL = Path(overrides.netR_model_path).expanduser().resolve() if overrides.netR_model_path else next(
+training_args = sys.argv[1:]
+path_parser = argparse.ArgumentParser(add_help=False)
+path_parser.add_argument('--netR_model_path')
+path_parser.add_argument('--run_dir')
+path_parser.add_argument('--resume_training')
+paths, _ = path_parser.parse_known_args(training_args)
+NETR_MODEL = Path(paths.netR_model_path).expanduser().resolve() if paths.netR_model_path else next(
 	(candidate for candidate in NETR_MODEL_CANDIDATES if candidate.is_file()), None,
 )
 if NETR_MODEL is None:
@@ -63,10 +66,17 @@ command = [
 	'--rel_topology_norm', 'timestep',
 	'--netR_model_path', str(NETR_MODEL),
 ]
-command.extend(sys.argv[1:])
+# Older isolated checkpoints still resume in their original directory.
+if not paths.run_dir and paths.resume_training and Path(paths.resume_training).name == 'dfg_training_last.tar':
+    run_dir = Path(paths.resume_training).expanduser().resolve().parent
+    command.extend(['--run_dir', str(run_dir)])
+command.extend(training_args)
 command.extend(['--netR_model_path', str(NETR_MODEL)])
 
-subprocess.run(command, cwd=ROOT, check=True, env=env)
+try:
+	subprocess.run(command, cwd=ROOT, check=True, env=env)
+except subprocess.CalledProcessError as error:
+	raise SystemExit(error.returncode) from None
 
 # split_percent 100:
 # --split_percent 100 --syn_num 1440

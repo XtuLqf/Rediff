@@ -26,54 +26,69 @@ python scripts/run_awa2_zerodiff_DFG_train.py
 
 先按第 1–2 节准备好环境、AWA2 数据和同一份 DRG。下面直接使用 AWA2 启动器；显式指定的 DRG 路径现在优先于默认目录查找。
 
-### 0.1 简单运行：一组一条命令
+### 0.1 S0/S1/S2 的区别
 
-在仓库根目录执行。启动器会查找已有的 AWA2 DRG；若有多份候选，按源码中的固定候选顺序选择，优先 100% DRG 的 GZSL 文件。启动时显示输出目录；SDGA 训练断点中记录实际 DRG 路径和校验值。默认平铺输出不生成 `config.json`。
+S0/S1/S2 仅是本文中的实验标签，启动器不再提供 `--experiment` 参数。实验组合直接写在下面的命令中；以后修改文档中的参数值，再复制整条命令运行即可，无需修改 Python 预设或设置 COMMON。
 
-```bash
-python scripts/run_awa2_zerodiff_DFG_train.py --experiment S0
-```
+| 实验 | gamma_rel | 生成器类别系数 | 生成器实例系数 | rel_pair_grouping |
+| --- | --- | --- | --- | --- |
+| S0：保留校准，关闭生成器关系约束 | 1 | 0 | 0 | matched |
+| S1：同状态双粒度对齐 | 1 | 1 | 1 | matched |
+| S2：混合状态关系对照 | 1 | 1 | 1 | mixed |
 
-S0 正常跑完后，再分别运行 S1、S2：
+三组保持校准、16 类 × 4 样本采样和分组时间步一致，使用固定状态权重。S0 不能改用 `gamma_rel=0`，否则校准也会关闭。S0 不是原始 ZeroDiff。S2 按整类混合，类内样本仍处于同一真实状态，不能单凭 S1−S2 推断两个粒度各自的状态效应。
 
-```bash
-python scripts/run_awa2_zerodiff_DFG_train.py --experiment S1
-```
+### 0.2 各数据集可直接复制的命令
 
-```bash
-python scripts/run_awa2_zerodiff_DFG_train.py --experiment S2
-```
+每条命令独立运行，不依赖其他命令定义的变量。已显式列出实验采样、关系权重、校准配置和主要运行设置；网络结构、学习率等未列参数沿用各数据集启动器，按需直接追加参数即可覆盖。已有 DRG 时无需重新训练，启动器自动查找对应 `out/<DATASET>/` 中的文件；指定其他文件可追加 `--netR_model_path '实际路径'`。
 
-三组默认 300 epochs，恢复原来的平铺输出：模型保存到 `out/AWA2/`，日志保存到 `log/AWA2/`，使用原有长文件名，不附加 S0/S1/S2 或关系配置后缀。新运行会覆盖同名输出，请沿用每次运行后手动记录结果的方式；不会自动创建 `out/ds_reg/` 或 `_run2` 目录。DRG 仍从 `out/AWA2/` 读取，优先候选为 `zerodiff_DRG_..._num:1800_gzsl.tar`。要指定其他 DRG，在命令末尾加 `--netR_model_path '实际路径'`。
+模型保存到 `out/<DATASET>/`，日志保存到 `log/<DATASET>/`，使用原长文件名，同名覆盖。每组完成后手动记录结果再运行下一组。不会自动创建 ds_reg 子目录，默认不生成 config.json。
 
-CUDA 检查在读取数据和创建输出文件之前执行；失败会直接显示原因。
-
-### 0.2 快捷预设及按需覆盖
-
-S0/S1/S2 已封装共同配置：种子 9182、300 epochs、每 5 epochs 评估、每 5 epochs 保存恢复断点、合成数量 5400、batch size 64、4 个扩散状态、16 类 × 4 样本的生成器采样。SDGA 使用固定状态权重，关闭第三模块的调度；原有校准距离/角度配置保留。
-
-| 命令参数 | 生成器类别/实例系数 | 关系分组 |
-| --- | --- | --- |
-| `--experiment S0` | 0 / 0 | 同状态 |
-| `--experiment S1` | 1 / 1 | 同状态 |
-| `--experiment S2` | 1 / 1 | 混合状态 |
-
-先看 S1−S0 的关系约束收益，再看 S1−S2 的状态组织收益。S0 保留校准、P×K 采样和分组时间步，不是原始 ZeroDiff。S2 按整类重新分组，类内对仍处于同一真实状态，不能单独解释为两个粒度各自的状态效应。
-
-只在需要更改默认设置时追加参数，例如：
+**AWA2**
 
 ```bash
-# 换训练种子
-python scripts/run_awa2_zerodiff_DFG_train.py --experiment S1 --manualSeed 9183
+# S0：保留校准，关闭生成器关系约束
+python scripts/run_awa2_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0 --rel_generator_instance_weight 0 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 9182 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 5400
+
+# S1：同状态双粒度对齐
+python scripts/run_awa2_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 9182 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 5400
+
+# S2：混合状态关系对照
+python scripts/run_awa2_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping mixed --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 9182 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 5400
+
 ```
 
-需要使用其他 DRG 时追加 `--netR_model_path '实际模型路径'`，显式路径优先于自动查找。所有对照复用同一份 DRG 即可。Git 提交号和模型哈希是可选的追溯记录，不是运行前置步骤。
+**CUB**
 
-目前只有 AWA2 启动器支持 `--experiment`，不要直接将这一参数用于 CUB/SUN 启动器。
+```bash
+# S0：保留校准，关闭生成器关系约束
+python scripts/run_cub_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0 --rel_generator_instance_weight 0 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 3483 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 1440
+
+# S1：同状态双粒度对齐
+python scripts/run_cub_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 3483 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 1440
+
+# S2：混合状态关系对照
+python scripts/run_cub_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping mixed --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 3483 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 1440
+
+```
+
+**SUN**
+
+```bash
+# S0：保留校准，关闭生成器关系约束
+python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0 --rel_generator_instance_weight 0 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 4115 --nepoch 400 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 400
+
+# S1：同状态双粒度对齐
+python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 4115 --nepoch 400 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 400
+
+# S2：混合状态关系对照
+python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping mixed --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 4115 --nepoch 400 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 400
+
+```
 
 ### 0.3 验收日志与手动记录
 
-默认短命令请在 `log/AWA2/train_zerodiff_DFG_...log` 中记录每次结果；最佳模型为 `out/AWA2/zerodiff_DFG_...num:5400gzsl_VCS.tar` 等，恢复断点为 `...num:5400_training_last.tar`。关系配置记录在日志中，训练断点保留训练配置及 DRG 校验值。默认平铺输出不生成 `config.json`。
+默认命令请在 `log/AWA2/train_zerodiff_DFG_...log` 中记录每次结果；最佳模型为 `out/AWA2/zerodiff_DFG_...num:5400gzsl_VCS.tar` 等，恢复断点为 `...num:5400_training_last.tar`。关系配置记录在日志中，训练断点保留训练配置及 DRG 校验值。默认平铺输出不生成 `config.json`。
 
 数值正确性的预期：
 
@@ -101,31 +116,22 @@ python scripts/run_awa2_zerodiff_DFG_train.py --experiment S1 --manualSeed 9183
 
 ### 0.4 可选消融：首轮之后再运行
 
-无需额外准备，直接在 S1 上覆盖一个参数，依次运行并手动记录结果：
+复制对应数据集的 S1 完整命令，直接修改下表中的参数值即可，其余参数保持不变：
 
-```bash
-# 仅类别关系
-python scripts/run_awa2_zerodiff_DFG_train.py --experiment S1 --rel_generator_instance_weight 0
-
-# 仅实例关系
-python scripts/run_awa2_zerodiff_DFG_train.py --experiment S1 --rel_generator_class_weight 0
-
-# 全局归一化
-python scripts/run_awa2_zerodiff_DFG_train.py --experiment S1 --rel_topology_norm global
-```
+| 消融 | 在 S1 命令中修改 |
+| --- | --- |
+| 仅类别关系 | `--rel_generator_instance_weight 1` 改为 `--rel_generator_instance_weight 0` |
+| 仅实例关系 | `--rel_generator_class_weight 1` 改为 `--rel_generator_class_weight 0` |
+| 全局归一化 | `--rel_topology_norm timestep` 改为 `--rel_topology_norm global` |
+| 更换种子 | 修改 `--manualSeed` 的值，三组使用相同种子比较 |
 
 不要用 `rel_class_weight=0` / `rel_instance_weight=0` 代替以上 G-only 系数，那会同时改变校准。随机采样对照可用 S1 命令覆盖 `--g_batch_mode random` ；但比较采样收益时也需要给 S0 做同样覆盖。等覆盖时 legacy fixed 与 SDGA 的聚合数学等价，不把它当作应当产生提升的独立创新消融。
 
 ### 0.5 中断恢复
 
-默认平铺运行恢复时，在原命令后添加 `--resume_training` 和 `out/AWA2/` 中完整的长文件名 `..._training_last.tar`。恢复时保持原实验参数。下面示例用于以前保存的独立目录（可能包含 `_run2` 等后缀）：
+复制该次运行使用的完整参数命令，在末尾追加 `--resume_training '实际训练断点路径'`。默认平铺断点在 `out/<DATASET>/` 下，以 `_training_last.tar` 结尾。恢复时保持原实验参数，不要使用最佳模型代替训练断点。
 
-```bash
-python scripts/run_awa2_zerodiff_DFG_train.py --experiment S1 \
-  --resume_training out/ds_reg/AWA2/s1_matched_seed9182/dfg_training_last.tar
-```
-
-此时自动使用断点所在目录。若原来另行指定了种子、DRG、训练设置，恢复时仍须保留那些参数。
+以前保存在独立目录中的 `dfg_training_last.tar` 仍会自动恢复到断点所在目录；显式指定 `--run_dir` 时使用指定目录。
 
 恢复 S0/S2 时必须使用对应系数、分组和目录。checkpoint 保存网络、优化器、最佳指标、全局 RNG 及 P×K/时间步/混合分组三个独立 RNG；校验配置不一致就报错。可以延长 `nepoch`，不能把 S0 恢复成 S1，也不能直接将旧 legacy 断点改成 SDGA。旧断点仅按 legacy 默认含义兼容。
 
@@ -137,7 +143,7 @@ python scripts/run_awa2_zerodiff_DFG_train.py --experiment S1 \
 python -m pytest tests/test_time_aware_relation.py -q
 ```
 
-第 1.02 版及启动修复在 Python 3.11 / PyTorch 2.9.1 CPU 环境下通过 34 项检查，覆盖数学归约、梯度、采样、启动器参数、实际 D/校准/G 更新、输出目录保护和恢复一致性，以及短命令的等价设置、默认平铺输出及 CUDA 失败时不创建输出；另核对四种 legacy 关系配置及旧采样器与第 1.01 版逐值一致，手册 Bash 语法检查通过。这些结果不代替 AWA2 的 GPU 完整实验。原干净基线诊断暂不接受这三组带关系参数的模型。
+第 1.02 版及启动修复在 Python 3.11 / PyTorch 2.9.1 CPU 环境下通过 34 项检查，覆盖数学归约、梯度、采样、启动器参数、实际 D/校准/G 更新、输出目录保护和恢复一致性，以及文档命令的参数解析、默认平铺输出及 CUDA 失败时不创建输出；另核对四种 legacy 关系配置及旧采样器与第 1.01 版逐值一致，手册 Bash 语法检查通过。这些结果不代替 AWA2 的 GPU 完整实验。原干净基线诊断暂不接受这三组带关系参数的模型。
 
 ### 0.6 CUDA 初始化失败的处理
 
@@ -173,7 +179,7 @@ pip install scikit-learn==1.3.0 scipy==1.10.0 numpy==1.24.3 pillow==9.4.0 matplo
 
 每个数据集需要 `Dataset/<DATASET>/res101.mat`、`ce_ce.mat`、`con_paco.mat`，以及 AWA2/SUN 的 `att_splits.mat` 或 CUB 的 `sent_splits.mat`。现有 `check_dataset_mats.sh` 统一检查 `att`，不能据此确认 CUB 的 `sent` 已准备好。
 
-以下变量与检查仅供第 3–7 节历史实验使用；日常运行和第 0 节快捷实验无需设置：
+以下变量与检查仅供第 3–7 节历史实验使用；日常运行和第 0 节显式参数实验无需设置：
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0
@@ -220,7 +226,7 @@ test -f "$DRG" && sha256sum "$DRG"
 
 确认路径存在后继续。不要选 DFG 或低比例训练文件；切换数据集必须重设 `DRG`。全部对照固定同一 DRG 路径、文件内容和 DFG 种子。
 
-当前 DFG 启动器优先使用显式的 `--netR_model_path`；未指定时自动查找默认候选。第 0 节快捷命令无需设置此处的 Bash 变量。
+当前 DFG 启动器优先使用显式的 `--netR_model_path`；未指定时自动查找默认候选。第 0 节显式参数命令无需设置此处的 Bash 变量。
 
 ## 3. 历史 legacy 实验：M0/M2/M5（按需参考）
 

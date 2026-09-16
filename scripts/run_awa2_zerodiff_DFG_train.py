@@ -19,15 +19,11 @@ NETR_MODEL_CANDIDATES = [
 	OUT_DIR / 'diffzero_pretrain_100percent_att:att_b:64_lr:0.0005_n_T:4_betas:0.1,20_gamma:ADV:10.0_VAE:1.0_x0:1.0_xt:1.0_dist:0.0_num:1800_zsl.tar',
 ]
 
-override_parser = argparse.ArgumentParser(add_help=False)
-override_parser.add_argument('--experiment', type=str.upper, choices=['S0', 'S1', 'S2'],
-	                        help='S0: G relation off; S1: matched SDGA; S2: mixed SDGA')
-overrides, training_args = override_parser.parse_known_args()
+training_args = sys.argv[1:]
 path_parser = argparse.ArgumentParser(add_help=False)
 path_parser.add_argument('--netR_model_path')
 path_parser.add_argument('--run_dir')
 path_parser.add_argument('--resume_training')
-path_parser.add_argument('--manualSeed', type=int, default=9182)
 paths, _ = path_parser.parse_known_args(training_args)
 NETR_MODEL = Path(paths.netR_model_path).expanduser().resolve() if paths.netR_model_path else next(
 	(candidate for candidate in NETR_MODEL_CANDIDATES if candidate.exists()),
@@ -64,27 +60,10 @@ command = [
 	'--rel_topology_norm', 'timestep',
 	'--netR_model_path', str(NETR_MODEL),
 ]
-if overrides.experiment:
-	name, grouping, class_weight, instance_weight = {
-		'S0': ('s0_control', 'matched', '0', '0'),
-		'S1': ('s1_matched', 'matched', '1', '1'),
-		'S2': ('s2_mixed', 'mixed', '1', '1'),
-	}[overrides.experiment]
-	command.extend([
-		'--gamma_rel', '1', '--rel_objective', 'sdga',
-		'--rel_time_pair_weight', '1', '--rel_time_mode', 'fixed', '--rel_time_strength', '0',
-		'--g_batch_mode', 'pk', '--g_pk_classes', '16', '--g_pk_samples', '4',
-		'--g_timestep_policy', 'class_group', '--rel_pair_grouping', grouping,
-		'--rel_generator_class_weight', class_weight, '--rel_generator_instance_weight', instance_weight,
-	])
-	# Older isolated checkpoints still resume in their original directory.
-	run_dir = paths.run_dir
-	if not run_dir and paths.resume_training and Path(paths.resume_training).name == 'dfg_training_last.tar':
-		run_dir = Path(paths.resume_training).expanduser().resolve().parent
-		command.extend(['--run_dir', str(run_dir)])
-	if not run_dir:
-		run_dir = OUT_DIR
-	print(f'实验 {overrides.experiment} | 输出目录: {run_dir}', flush=True)
+# Older isolated checkpoints still resume in their original directory.
+if not paths.run_dir and paths.resume_training and Path(paths.resume_training).name == 'dfg_training_last.tar':
+    run_dir = Path(paths.resume_training).expanduser().resolve().parent
+    command.extend(['--run_dir', str(run_dir)])
 command.extend(training_args)
 # Resolve explicit relative paths before the subprocess changes directory.
 command.extend(['--netR_model_path', str(NETR_MODEL)])

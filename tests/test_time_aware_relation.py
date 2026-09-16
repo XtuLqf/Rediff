@@ -367,12 +367,22 @@ def test_launcher_accepts_explicit_drg_outside_default_directory(monkeypatch, tm
     assert calls[0][-4:-2] == ['--nepoch', '1']
 
 
+def documented_sdga_arguments(dataset, experiment):
+    import shlex
+    runbook = Path(__file__).resolve().parents[1] / 'SERVER_RUNBOOK.md'
+    prefix = f'python scripts/run_{dataset}_zerodiff_DFG_train.py '
+    commands = [line for line in runbook.read_text(encoding='utf-8').splitlines()
+                if line.startswith(prefix) and '--rel_objective sdga' in line]
+    assert len(commands) == 3
+    return shlex.split(commands[int(experiment[1])])[2:]
+
+
 @pytest.mark.parametrize('experiment,grouping,weight', [('S0', 'matched', 0), ('S1', 'matched', 1), ('S2', 'mixed', 1)])
-def test_awa2_short_experiments_keep_settings_and_original_output_layout(monkeypatch, tmp_path, experiment, grouping, weight):
+def test_awa2_documented_experiments_keep_settings_and_original_output_layout(monkeypatch, tmp_path, experiment, grouping, weight):
     root = Path(__file__).resolve().parents[1]
     checkpoint = tmp_path / 'drg.tar'
     checkpoint.touch()
-    monkeypatch.setattr(sys, 'argv', ['launcher', '--experiment', experiment, '--netR_model_path', str(checkpoint)])
+    monkeypatch.setattr(sys, 'argv', ['launcher', *documented_sdga_arguments('awa2', experiment), '--netR_model_path', str(checkpoint)])
     calls = []
     monkeypatch.setattr(subprocess, 'run', lambda command, **kwargs: calls.append(command))
     runpy.run_path(str(root / 'scripts' / 'run_awa2_zerodiff_DFG_train.py'))
@@ -408,12 +418,12 @@ def test_awa2_short_experiments_keep_settings_and_original_output_layout(monkeyp
     assert scope['training_run_config']['drg_sha256'] == hashlib.sha256(b'').hexdigest()
 
 
-def test_awa2_short_resume_uses_checkpoint_directory_and_preserves_exit_code(monkeypatch, tmp_path):
+def test_awa2_explicit_resume_uses_checkpoint_directory_and_preserves_exit_code(monkeypatch, tmp_path):
     root = Path(__file__).resolve().parents[1]
     drg = tmp_path / 'drg.tar'
     drg.touch()
     resume = tmp_path / 'prior_run' / 'dfg_training_last.tar'
-    monkeypatch.setattr(sys, 'argv', ['launcher', '--experiment', 'S1', '--netR_model_path', str(drg),
+    monkeypatch.setattr(sys, 'argv', ['launcher', *documented_sdga_arguments('awa2', 'S1'), '--netR_model_path', str(drg),
                                      '--resume_training', str(resume), '--nepoch', '400'])
     calls = []
     def fail(command, **kwargs):
@@ -569,3 +579,47 @@ def test_run_directory_metadata_collision_and_resume_validation(monkeypatch, tmp
     checkpoint.write_bytes(b'a different DRG at the same path')
     with pytest.raises(ValueError, match='configuration differs'):
         exec(startup, definitions)
+
+
+@pytest.mark.parametrize('dataset', ['cub', 'sun'])
+@pytest.mark.parametrize('experiment,grouping,weight', [('S0', 'matched', 0), ('S1', 'matched', 1), ('S2', 'mixed', 1)])
+def test_cub_sun_documented_experiments_preserve_dataset_defaults(monkeypatch, tmp_path, dataset, experiment, grouping, weight):
+    launcher = Path(__file__).resolve().parents[1] / 'scripts' / f'run_{dataset}_zerodiff_DFG_train.py'
+    checkpoint = tmp_path / 'drg.tar'
+    checkpoint.touch()
+    calls = []
+    monkeypatch.setattr(subprocess, 'run', lambda command, **kwargs: calls.append(command))
+
+    def options_for(*arguments):
+        monkeypatch.setattr(sys, 'argv', [str(launcher), '--netR_model_path', str(checkpoint), *arguments])
+        runpy.run_path(str(launcher))
+        assert '--experiment' not in calls[-1]
+        return parse_options(monkeypatch, *calls[-1][2:])
+
+    baseline = vars(options_for())
+    options = vars(options_for(*documented_sdga_arguments(dataset, experiment)))
+    expected_changes = dict(rel_objective='sdga', rel_time_mode='fixed', rel_time_strength=0,
+                            g_batch_mode='pk', g_timestep_policy='class_group',
+                            rel_pair_grouping=grouping, rel_generator_class_weight=weight,
+                            rel_generator_instance_weight=weight)
+    assert options == dict(baseline, **expected_changes)
+    assert options['run_dir'] is None
+    assert (options['g_pk_classes'], options['g_pk_samples'], options['batch_size'], options['n_T']) == (16, 4, 64, 4)
+    assert (options['manualSeed'], options['nepoch'], options['syn_num']) == (
+        (3483, 300, 1440) if dataset == 'cub' else (4115, 400, 400))
+    overridden = options_for(*documented_sdga_arguments(dataset, experiment), '--nepoch', '2', '--rel_generator_instance_weight', '0.25')
+    assert overridden.nepoch == 2 and overridden.rel_generator_instance_weight == 0.25
+
+
+@pytest.mark.parametrize('dataset', ['cub', 'sun'])
+def test_cub_sun_launcher_preserves_training_failure_exit_code(monkeypatch, tmp_path, dataset):
+    launcher = Path(__file__).resolve().parents[1] / 'scripts' / f'run_{dataset}_zerodiff_DFG_train.py'
+    checkpoint = tmp_path / 'drg.tar'
+    checkpoint.touch()
+    monkeypatch.setattr(sys, 'argv', [str(launcher), '--netR_model_path', str(checkpoint), *documented_sdga_arguments(dataset, 'S0')])
+    def fail(command, **kwargs):
+        raise subprocess.CalledProcessError(2, command)
+    monkeypatch.setattr(subprocess, 'run', fail)
+    with pytest.raises(SystemExit) as caught:
+        runpy.run_path(str(launcher))
+    assert caught.value.code == 2
