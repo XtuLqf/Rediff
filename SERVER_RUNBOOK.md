@@ -4,17 +4,33 @@
 
 所有命令在仓库根目录的 **Bash** 中执行。基线和方法使用同一代码版本，不必为诊断切换分支。
 
+## 日常运行：直接使用启动脚本
+
+已准备好环境和数据时，在仓库根目录执行：
+
+```bash
+# 仅在没有可用 DRG、或需要重新训练 DRG 时运行
+python scripts/run_awa2_zerodiff_DRG_train.py
+
+# 自动加载 out/AWA2/ 中的 DRG，运行当前启动器默认的 DFG 配置
+python scripts/run_awa2_zerodiff_DFG_train.py
+```
+
+已有 DRG 时直接运行第二条。DFG 不会重新训练 DRG。默认 DFG 是 legacy 时间感知关系配置（`gamma_rel=1`、`rel_objective=legacy`），不是 S0，也不是关闭关系模块的原始基线。需要基线时只追加 `--gamma_rel 0`；需要 SDGA 时使用下面的 S0/S1/S2 命令。
+
+不需要设置 `DRG`、`COMMON`，也不需要每次执行 `sha256sum` 或 Git 查询。`export CUDA_VISIBLE_DEVICES=0` 仅在需要指定 GPU 时使用，同一终端设置一次即可；已有调度器分配 GPU 时沿用其配置。新终端按需执行 `conda activate rediff`。
+
+模型直接保存到 `out/AWA2/`，日志保存到 `log/AWA2/`，沿用原长文件名并允许覆盖。每次训练结束手动记录结果，再运行下一组。
+
 ## 0. 第 1.02 版：模块二 SDGA 验收
 
 先按第 1–2 节准备好环境、AWA2 数据和同一份 DRG。下面直接使用 AWA2 启动器；显式指定的 DRG 路径现在优先于默认目录查找。
 
 ### 0.1 简单运行：一组一条命令
 
-在仓库根目录执行。启动器会查找已有的 AWA2 DRG；若有多份候选，按源码中的固定候选顺序选择，优先 100% DRG 的 GZSL 文件。启动时显示输出目录，`config.json` 记录实际 DRG 路径和校验值。
+在仓库根目录执行。启动器会查找已有的 AWA2 DRG；若有多份候选，按源码中的固定候选顺序选择，优先 100% DRG 的 GZSL 文件。启动时显示输出目录；SDGA 训练断点中记录实际 DRG 路径和校验值。默认平铺输出不生成 `config.json`。
 
 ```bash
-conda activate rediff
-export CUDA_VISIBLE_DEVICES=0
 python scripts/run_awa2_zerodiff_DFG_train.py --experiment S0
 ```
 
@@ -28,87 +44,36 @@ python scripts/run_awa2_zerodiff_DFG_train.py --experiment S1
 python scripts/run_awa2_zerodiff_DFG_train.py --experiment S2
 ```
 
-三组依旧使用下述相同实验设置，默认 300 epochs。S0 关闭 G 关系约束，S1 同状态对齐，S2 混合状态对照。已有同名目录时自动选择 `_run2`、`_run3` 等新目录，旧日志和模型保留；无需为启动失败的旧目录传入恢复参数。默认候选就是用户已有的 `zerodiff_DRG_..._num:1800_gzsl.tar`；要指定其他 DRG，在命令末尾加 `--netR_model_path '实际路径'`。
+三组默认 300 epochs，恢复原来的平铺输出：模型保存到 `out/AWA2/`，日志保存到 `log/AWA2/`，使用原有长文件名，不附加 S0/S1/S2 或关系配置后缀。新运行会覆盖同名输出，请沿用每次运行后手动记录结果的方式；不会自动创建 `out/ds_reg/` 或 `_run2` 目录。DRG 仍从 `out/AWA2/` 读取，优先候选为 `zerodiff_DRG_..._num:1800_gzsl.tar`。要指定其他 DRG，在命令末尾加 `--netR_model_path '实际路径'`。
 
-CUDA 检查在读取数据和创建输出文件之前执行；失败会直接显示原因，启动器不再重复打印整条参数列表。以下完整参数只在需要修改设置时展开。
+CUDA 检查在读取数据和创建输出文件之前执行；失败会直接显示原因。
 
-### 0.2 完整参数（按需）
+### 0.2 快捷预设及按需覆盖
 
-<details>
-<summary>展开 COMMON 配置及等价的完整命令；运行第 0.4 节消融前可在这里设置 COMMON</summary>
+S0/S1/S2 已封装共同配置：种子 9182、300 epochs、每 5 epochs 评估、每 5 epochs 保存恢复断点、合成数量 5400、batch size 64、4 个扩散状态、16 类 × 4 样本的生成器采样。SDGA 使用固定状态权重，关闭第三模块的调度；原有校准距离/角度配置保留。
 
-在同一个 Bash 终端执行一次，将 `DRG` 替换为实际文件：
+| 命令参数 | 生成器类别/实例系数 | 关系分组 |
+| --- | --- | --- |
+| `--experiment S0` | 0 / 0 | 同状态 |
+| `--experiment S1` | 1 / 1 | 同状态 |
+| `--experiment S2` | 1 / 1 | 混合状态 |
 
-```bash
-export CUDA_VISIBLE_DEVICES=0
-DRG='out/AWA2/替换为实际DRG文件名.tar'
-test -f "$DRG" && sha256sum "$DRG"
-git branch --show-current
-git rev-parse HEAD
+先看 S1−S0 的关系约束收益，再看 S1−S2 的状态组织收益。S0 保留校准、P×K 采样和分组时间步，不是原始 ZeroDiff。S2 按整类重新分组，类内对仍处于同一真实状态，不能单独解释为两个粒度各自的状态效应。
 
-COMMON=(
-  --netR_model_path "$DRG" --manualSeed 9182
-  --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5
-  --batch_size 64 --n_T 4
-  --gamma_rel 1 --rel_objective sdga
-  --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1
-  --rel_proj_dim 512 --rel_dist_ratio 1
-  --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0
-  --rel_topology_norm timestep
-  --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4
-  --g_timestep_policy class_group
-)
-```
-
-固定为 300 epochs、每 5 epochs 评估、合成数量沿用启动器的 5400。模块三关闭。原校准距离/角度配置保留，G 的 SDGA 只使用距离关系。三个实验均采用相同的 P×K 生成器批次、时间步策略和校准系数。
-
-**使用完整参数依次运行三组**
-
-**S0：保留校准，关闭 G 的类别和实例关系约束。** 这是当前核心对照；`gamma_rel` 保持 1，不能改成 0，否则校准也会关闭。
+只在需要更改默认设置时追加参数，例如：
 
 ```bash
-python scripts/run_awa2_zerodiff_DFG_train.py "${COMMON[@]}" \
-  --rel_pair_grouping matched \
-  --rel_generator_class_weight 0 --rel_generator_instance_weight 0 \
-  --run_dir out/ds_reg/AWA2/s0_control_seed9182
+# 换训练种子
+python scripts/run_awa2_zerodiff_DFG_train.py --experiment S1 --manualSeed 9183
 ```
 
-**S1：SDGA 同状态双粒度对齐。**
+需要使用其他 DRG 时追加 `--netR_model_path '实际模型路径'`，显式路径优先于自动查找。所有对照复用同一份 DRG 即可。Git 提交号和模型哈希是可选的追溯记录，不是运行前置步骤。
 
-```bash
-python scripts/run_awa2_zerodiff_DFG_train.py "${COMMON[@]}" \
-  --rel_pair_grouping matched \
-  --rel_generator_class_weight 1 --rel_generator_instance_weight 1 \
-  --run_dir out/ds_reg/AWA2/s1_matched_seed9182
-```
-
-**S2：SDGA 混合状态对照。** 整类重新分组，每组类别数、样本数及有效对数不变，生成器时间步和带噪输入仍然正确。
-
-```bash
-python scripts/run_awa2_zerodiff_DFG_train.py "${COMMON[@]}" \
-  --rel_pair_grouping mixed \
-  --rel_generator_class_weight 1 --rel_generator_instance_weight 1 \
-  --run_dir out/ds_reg/AWA2/s2_mixed_seed9182
-```
-
-先看 S1−S0 的关系约束收益，再看 S1−S2 的状态组织收益。S0 不是原始 ZeroDiff：它保留关系投影器校准、P×K 生成器采样及分组时间步。S2 的跨类对跨状态，类内对仍在同一真实状态；类内项改变的是关系块组成及归一化尺度。不能把 S1−S2 单独解读为两个粒度各自的状态效应。
-
-</details>
+目前只有 AWA2 启动器支持 `--experiment`，不要直接将这一参数用于 CUB/SUN 启动器。
 
 ### 0.3 验收日志与手动记录
 
-每个目录保存 `config.json`、`train.log`、`dfg_training_last.tar`，以及产生最佳结果时保存的 `dfg_gzsl_VCS.tar` / `dfg_zsl_VCS.tar` 等模型。`config.json` 包含有效配置、种子、DRG 路径和 SHA-256。短命令自动选择新目录；若手动指定 `--run_dir`，已有非空目录仍只允许显式恢复。
-
-若启动时显示了 `_run2` 等后缀，请将下面 `RUN` 名称改成显示的实际目录名：
-
-```bash
-for RUN in s0_control_seed9182 s1_matched_seed9182 s2_mixed_seed9182; do
-  LOG="out/ds_reg/AWA2/$RUN/train.log"
-  echo "$RUN"
-  grep '^SDGA blocks:' "$LOG" | tail -n 1
-  grep -E 'best GZSL \(VCS\)|best ZSL \(VCS\)' "$LOG" | tail -n 2
-done
-```
+默认短命令请在 `log/AWA2/train_zerodiff_DFG_...log` 中记录每次结果；最佳模型为 `out/AWA2/zerodiff_DFG_...num:5400gzsl_VCS.tar` 等，恢复断点为 `...num:5400_training_last.tar`。关系配置记录在日志中，训练断点保留训练配置及 DRG 校验值。默认平铺输出不生成 `config.json`。
 
 数值正确性的预期：
 
@@ -124,7 +89,7 @@ done
 
 `*_loss_per_block`、`*_student_scale`、`*_teacher_scale` 用于观察各块损失与原始尺度；`signal_retention_by_generation_state` 记录实际 `alpha_bar[t+1]`。S2 的 `signal_retention_mean` 是混合组内平均信号，不代表存在一个对应的真实时间步。日志数值按 epoch 内 G 更新取平均，已脱离梯度图。
 
-填写下表并附上 git 提交、DRG SHA-256；U/S/H 取同一行 `best GZSL (VCS)`，T1 取独立的 `best ZSL (VCS)`。代码输出为小数，统一乘 100 后可填百分数：
+每次训练结束填写下表（git 提交和 DRG SHA-256 可选记录）；U/S/H 取同一行 `best GZSL (VCS)`，T1 取独立的 `best ZSL (VCS)`。代码输出为小数，统一乘 100 后可填百分数：
 
 | 实验 | 种子 | GZSL U | GZSL S | GZSL H | ZSL T1 | 有效对符合预期 | 用时/异常 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -136,33 +101,24 @@ done
 
 ### 0.4 可选消融：首轮之后再运行
 
-先展开第 0.2 节设置 `COMMON`。不改变校准，只关闭一个生成器项：
+无需额外准备，直接在 S1 上覆盖一个参数，依次运行并手动记录结果：
 
 ```bash
 # 仅类别关系
-python scripts/run_awa2_zerodiff_DFG_train.py "${COMMON[@]}" \
-  --rel_pair_grouping matched \
-  --rel_generator_class_weight 1 --rel_generator_instance_weight 0 \
-  --run_dir out/ds_reg/AWA2/s3_class_only_seed9182
+python scripts/run_awa2_zerodiff_DFG_train.py --experiment S1 --rel_generator_instance_weight 0
 
 # 仅实例关系
-python scripts/run_awa2_zerodiff_DFG_train.py "${COMMON[@]}" \
-  --rel_pair_grouping matched \
-  --rel_generator_class_weight 0 --rel_generator_instance_weight 1 \
-  --run_dir out/ds_reg/AWA2/s4_instance_only_seed9182
+python scripts/run_awa2_zerodiff_DFG_train.py --experiment S1 --rel_generator_class_weight 0
 
-# 跨状态共用归一化尺度；同状态掩码和等块聚合保持不变
-python scripts/run_awa2_zerodiff_DFG_train.py "${COMMON[@]}" \
-  --rel_pair_grouping matched --rel_topology_norm global \
-  --rel_generator_class_weight 1 --rel_generator_instance_weight 1 \
-  --run_dir out/ds_reg/AWA2/s5_global_norm_seed9182
+# 全局归一化
+python scripts/run_awa2_zerodiff_DFG_train.py --experiment S1 --rel_topology_norm global
 ```
 
-不要用 `rel_class_weight=0` / `rel_instance_weight=0` 代替以上 G-only 系数，那会同时改变校准。随机采样对照可用 S1 命令覆盖 `--g_batch_mode random` 并换新目录；但比较采样收益时也需要给 S0 做同样覆盖。等覆盖时 legacy fixed 与 SDGA 的聚合数学等价，不把它当作应当产生提升的独立创新消融。
+不要用 `rel_class_weight=0` / `rel_instance_weight=0` 代替以上 G-only 系数，那会同时改变校准。随机采样对照可用 S1 命令覆盖 `--g_batch_mode random` ；但比较采样收益时也需要给 S0 做同样覆盖。等覆盖时 legacy fixed 与 SDGA 的聚合数学等价，不把它当作应当产生提升的独立创新消融。
 
 ### 0.5 中断恢复
 
-使用短命令启动的 S1 也可简短恢复；将路径替换为实际输出目录（可能包含 `_run2` 等后缀）：
+默认平铺运行恢复时，在原命令后添加 `--resume_training` 和 `out/AWA2/` 中完整的长文件名 `..._training_last.tar`。恢复时保持原实验参数。下面示例用于以前保存的独立目录（可能包含 `_run2` 等后缀）：
 
 ```bash
 python scripts/run_awa2_zerodiff_DFG_train.py --experiment S1 \
@@ -170,16 +126,6 @@ python scripts/run_awa2_zerodiff_DFG_train.py --experiment S1 \
 ```
 
 此时自动使用断点所在目录。若原来另行指定了种子、DRG、训练设置，恢复时仍须保留那些参数。
-
-重新设置同一份 `COMMON`，保持所有训练参数不变，仅添加恢复路径。以 S1 为例：
-
-```bash
-python scripts/run_awa2_zerodiff_DFG_train.py "${COMMON[@]}" \
-  --rel_pair_grouping matched \
-  --rel_generator_class_weight 1 --rel_generator_instance_weight 1 \
-  --run_dir out/ds_reg/AWA2/s1_matched_seed9182 \
-  --resume_training out/ds_reg/AWA2/s1_matched_seed9182/dfg_training_last.tar
-```
 
 恢复 S0/S2 时必须使用对应系数、分组和目录。checkpoint 保存网络、优化器、最佳指标、全局 RNG 及 P×K/时间步/混合分组三个独立 RNG；校验配置不一致就报错。可以延长 `nepoch`，不能把 S0 恢复成 S1，也不能直接将旧 legacy 断点改成 SDGA。旧断点仅按 legacy 默认含义兼容。
 
@@ -191,7 +137,7 @@ python scripts/run_awa2_zerodiff_DFG_train.py "${COMMON[@]}" \
 python -m pytest tests/test_time_aware_relation.py -q
 ```
 
-第 1.02 版及启动修复在 Python 3.11 / PyTorch 2.9.1 CPU 环境下通过 34 项检查，覆盖数学归约、梯度、采样、启动器参数、实际 D/校准/G 更新、输出目录保护和恢复一致性，以及短命令的等价设置、目录避让和 CUDA 失败时不创建输出；另核对四种 legacy 关系配置及旧采样器与第 1.01 版逐值一致，手册 Bash 语法检查通过。这些结果不代替 AWA2 的 GPU 完整实验。原干净基线诊断暂不接受这三组带关系参数的模型。
+第 1.02 版及启动修复在 Python 3.11 / PyTorch 2.9.1 CPU 环境下通过 34 项检查，覆盖数学归约、梯度、采样、启动器参数、实际 D/校准/G 更新、输出目录保护和恢复一致性，以及短命令的等价设置、默认平铺输出及 CUDA 失败时不创建输出；另核对四种 legacy 关系配置及旧采样器与第 1.01 版逐值一致，手册 Bash 语法检查通过。这些结果不代替 AWA2 的 GPU 完整实验。原干净基线诊断暂不接受这三组带关系参数的模型。
 
 ### 0.6 CUDA 初始化失败的处理
 
@@ -227,7 +173,7 @@ pip install scikit-learn==1.3.0 scipy==1.10.0 numpy==1.24.3 pillow==9.4.0 matplo
 
 每个数据集需要 `Dataset/<DATASET>/res101.mat`、`ce_ce.mat`、`con_paco.mat`，以及 AWA2/SUN 的 `att_splits.mat` 或 CUB 的 `sent_splits.mat`。现有 `check_dataset_mats.sh` 统一检查 `att`，不能据此确认 CUB 的 `sent` 已准备好。
 
-首轮在同一个终端设置：
+以下变量与检查仅供第 3–7 节历史实验使用；日常运行和第 0 节快捷实验无需设置：
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0
@@ -254,7 +200,7 @@ git status --short
 
 本轮不修改训练长度、合成样本数、特征、评估间隔，不重提取特征。
 
-## 2. 固定同一份 DRG
+## 2. 固定同一份 DRG（历史实验的可选显式配置）
 
 已有兼容的本数据集 100% DRG 就复用，没有时执行一次：
 
@@ -274,9 +220,9 @@ test -f "$DRG" && sha256sum "$DRG"
 
 确认路径存在后继续。不要选 DFG 或低比例训练文件；切换数据集必须重设 `DRG`。全部对照固定同一 DRG 路径、文件内容和 DFG 种子。
 
-当前 DFG 启动器先搜索默认 DRG，成功后才追加命令行覆盖。即使指定 `--netR_model_path`，默认搜索失败仍会提前报错。保留现有 DRG 启动器生成文件的原位置和名称；AWA2 尤其要求匹配其候选文件名。本轮不修改启动器。
+当前 DFG 启动器优先使用显式的 `--netR_model_path`；未指定时自动查找默认候选。第 0 节快捷命令无需设置此处的 Bash 变量。
 
-## 3. 首轮只跑三个实验
+## 3. 历史 legacy 实验：M0/M2/M5（按需参考）
 
 按 M0 → M2 → M5 顺序串行运行，每条训练结束后再运行下一条。尾部标量参数会覆盖启动器默认值。
 
@@ -316,7 +262,7 @@ python "$LAUNCHER" \
 
 未覆盖的关系参数沿用启动器：类别/实例权重均为 1、投影维度 512、教师锚定权重 1、距离/角度系数 1/2。首轮只需 **3 次 DFG 完整训练**，加上至多 1 次 DRG 准备。
 
-**输出覆盖：** 日志在 `log/<DATASET>/`，权重在 `out/<DATASET>/`。这三组及下一节三组的关系后缀不同，可以相互区分；但文件名不含训练种子、DRG 路径、教师锚定权重或角度系数。重复已有配置、换种子或做部分扩展消融会覆盖旧结果。启动前先检查目录，已有对应结果需另存备份；不要并行运行可能同名的实验。本轮没有新增输出隔离能力。
+**输出覆盖：** 当前代码的日志在 `log/<DATASET>/`，权重在 `out/<DATASET>/`，不再附加关系配置后缀。这些实验会使用相同文件名，按顺序运行并手动记录结果即可；需要保留某份模型时自行另存。
 
 ## 4. 按需追加三个对照
 

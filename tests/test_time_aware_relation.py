@@ -368,20 +368,16 @@ def test_launcher_accepts_explicit_drg_outside_default_directory(monkeypatch, tm
 
 
 @pytest.mark.parametrize('experiment,grouping,weight', [('S0', 'matched', 0), ('S1', 'matched', 1), ('S2', 'mixed', 1)])
-def test_awa2_short_experiments_keep_settings_and_skip_existing_runs(monkeypatch, tmp_path, experiment, grouping, weight):
+def test_awa2_short_experiments_keep_settings_and_original_output_layout(monkeypatch, tmp_path, experiment, grouping, weight):
     root = Path(__file__).resolve().parents[1]
     checkpoint = tmp_path / 'drg.tar'
     checkpoint.touch()
-    run_name = {'S0': 's0_control', 'S1': 's1_matched', 'S2': 's2_mixed'}[experiment]
-    base = root / 'out' / 'ds_reg' / 'AWA2' / f'{run_name}_seed9182'
-    original_exists = Path.exists
-    monkeypatch.setattr(Path, 'exists', lambda path: path in (base, base.with_name(base.name + '_run2')) or original_exists(path))
     monkeypatch.setattr(sys, 'argv', ['launcher', '--experiment', experiment, '--netR_model_path', str(checkpoint)])
     calls = []
     monkeypatch.setattr(subprocess, 'run', lambda command, **kwargs: calls.append(command))
     runpy.run_path(str(root / 'scripts' / 'run_awa2_zerodiff_DFG_train.py'))
     options = parse_options(monkeypatch, *calls[0][2:])
-    assert options.run_dir == str(base.with_name(base.name + '_run3'))
+    assert options.run_dir is None
     assert options.rel_objective == 'sdga' and options.gamma_rel == 1
     assert options.rel_pair_grouping == grouping
     assert options.rel_generator_class_weight == options.rel_generator_instance_weight == weight
@@ -390,6 +386,26 @@ def test_awa2_short_experiments_keep_settings_and_skip_existing_runs(monkeypatch
     assert (options.g_pk_classes, options.g_pk_samples, options.batch_size, options.n_T) == (16, 4, 64, 4)
     assert (options.rel_time_mode, options.rel_time_strength, options.rel_time_pair_weight) == ('fixed', 0, 1)
     assert (options.nepoch, options.eval_interval, options.syn_num, options.manualSeed) == (300, 5, 5400, 9182)
+
+    # Exercise actual startup twice without opening Windows-incompatible legacy names.
+    options.cuda = False
+    monkeypatch.chdir(tmp_path)
+    scope = training_namespace(options)
+    log_paths = []
+    scope.update(cudnn=torch.backends.cudnn, hashlib=hashlib,
+                 Logger=lambda path, append=False: log_paths.append((path, append)) or io.StringIO())
+    startup = trainer_startup_code()
+    exec(startup, scope)
+    expected = ('zerodiff_DFG_100percent_att:att_b:64_lr:0.0005_n_T:4_betas:0.1,20'
+                '_gamma:ADV:10.0_VAE:1.0_x0:1.0_xt:1.0_dist:0.0_f:1.5_num:5400')
+    assert scope['model_save_name'] == './out/AWA2/' + expected
+    assert log_paths[-1] == ('./log/AWA2/train_' + expected, False)
+    expected_random = np.random.rand()
+    exec(startup, scope)  # Existing output directories must allow the next experiment.
+    assert np.random.rand() == expected_random
+    assert log_paths[0] == log_paths[1]
+    assert not (tmp_path / 'out' / 'ds_reg').exists()
+    assert scope['training_run_config']['drg_sha256'] == hashlib.sha256(b'').hexdigest()
 
 
 def test_awa2_short_resume_uses_checkpoint_directory_and_preserves_exit_code(monkeypatch, tmp_path):

@@ -77,19 +77,13 @@ if overrides.experiment:
 		'--g_timestep_policy', 'class_group', '--rel_pair_grouping', grouping,
 		'--rel_generator_class_weight', class_weight, '--rel_generator_instance_weight', instance_weight,
 	])
-	if not paths.run_dir:
-		if paths.resume_training:
-			run_dir = Path(paths.resume_training).expanduser().resolve().parent
-		else:
-			base_dir = ROOT / 'out' / 'ds_reg' / 'AWA2' / f'{name}_seed{paths.manualSeed}'
-			run_dir = base_dir
-			attempt = 2
-			while run_dir.exists():
-				run_dir = base_dir.with_name(f'{base_dir.name}_run{attempt}')
-				attempt += 1
+	# Older isolated checkpoints still resume in their original directory.
+	run_dir = paths.run_dir
+	if not run_dir and paths.resume_training and Path(paths.resume_training).name == 'dfg_training_last.tar':
+		run_dir = Path(paths.resume_training).expanduser().resolve().parent
 		command.extend(['--run_dir', str(run_dir)])
-	else:
-		run_dir = paths.run_dir
+	if not run_dir:
+		run_dir = OUT_DIR
 	print(f'实验 {overrides.experiment} | 输出目录: {run_dir}', flush=True)
 command.extend(training_args)
 # Resolve explicit relative paths before the subprocess changes directory.

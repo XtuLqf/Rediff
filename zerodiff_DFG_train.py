@@ -102,34 +102,17 @@ new_relation_behavior = (
     or opt.rel_generator_class_weight != opt.rel_class_weight
     or opt.rel_generator_instance_weight != opt.rel_instance_weight
 )
-if new_relation_behavior and not opt.run_dir:
-    raise ValueError('New relation/sampling settings require --run_dir to isolate experiments.')
 if opt.run_dir:
     opt.run_dir = os.path.abspath(opt.run_dir)
     if os.path.isdir(opt.run_dir) and os.listdir(opt.run_dir) and not opt.resume_training:
         raise FileExistsError('Run directory is not empty; use a new --run_dir or --resume_training.')
     os.makedirs(opt.run_dir, exist_ok=True)
-if opt.gamma_rel > 0:
-    relation_run_suffix = (
-        f"_tvsra-g{opt.gamma_rel:g}"
-        f"-{opt.rel_time_mode}"
-        f"-s{opt.rel_time_strength:g}"
-        f"-rf{opt.rel_reliability_floor:g}"
-        f"-n{opt.rel_topology_norm}"
-        f"-c{opt.rel_class_weight:g}"
-        f"-i{opt.rel_instance_weight:g}"
-        f"-p{opt.rel_proj_dim}"
-        f"-tp{opt.rel_time_pair_weight:g}"
-    )
-else:
-    relation_run_suffix = ""
-
 logger_name = "./log/%s/train_zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_f:%.1f_num:%s" % (
     opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
-    str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.factor_dist, opt.syn_num) + relation_run_suffix
+    str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.factor_dist, opt.syn_num)
 model_save_name = "./out/%s/zerodiff_DFG_%dpercent_att:%s_b:%d_lr:%s_n_T:%d_betas:%s,%s_gamma:ADV:%.1f_VAE:%.1f_x0:%.1f_xt:%.1f_dist:%.1f_f:%.1f_num:%d" % (
     opt.dataset, opt.split_percent, opt.class_embedding, opt.batch_size, str(opt.lr), opt.n_T, str(opt.ddpmbeta1),
-    str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.factor_dist, opt.syn_num) + relation_run_suffix
+    str(opt.ddpmbeta2), opt.gamma_ADV, opt.gamma_VAE, opt.gamma_x0, opt.gamma_xt, opt.gamma_dist, opt.factor_dist, opt.syn_num)
 if opt.run_dir:
     logger_name = os.path.join(opt.run_dir, 'train')
     model_save_name = os.path.join(opt.run_dir, 'dfg')
@@ -151,8 +134,8 @@ if opt.manualSeed is None:
 print("Random Seed: ", opt.manualSeed)
 random.seed(opt.manualSeed)
 torch.manual_seed(opt.manualSeed)
-# Legacy keeps its original RNG behavior; isolated runs also seed NumPy.
-if opt.run_dir:
+# Preserve experiment RNG behavior independently of the output layout.
+if opt.run_dir or new_relation_behavior:
     np.random.seed(opt.manualSeed)
 if opt.cuda:
     torch.cuda.manual_seed_all(opt.manualSeed)
@@ -168,7 +151,7 @@ training_run_config = {
 for path_key in ('netR_model_path', 'dataroot'):
     if training_run_config[path_key] is not None:
         training_run_config[path_key] = os.path.abspath(training_run_config[path_key])
-if opt.run_dir and opt.netR_model_path:
+if (opt.run_dir or new_relation_behavior) and opt.netR_model_path:
     drg_digest = hashlib.sha256()
     with open(opt.netR_model_path, 'rb') as drg_file:
         for chunk in iter(lambda: drg_file.read(1024 * 1024), b''):
