@@ -1,69 +1,82 @@
 # ZeroDiff baseline relation diagnosis
 
-This package measures the problem targeted by time-aware multi-granularity
-relation consistency without updating or extending the baseline model.
+This package measures cross-class and within-class relation preservation
+across diffusion states without updating the clean ZeroDiff baseline model.
 
-The diagnosis asks three questions at every diffusion timestep:
+At each diffusion timestep it asks how closely generated cross-class distances
+align with semantic distances, how closely generated within-class distances
+align with PaCo distances, and whether their pairwise rankings agree. Each
+relation is normalized by its own positive mean. Samples, latent variables,
+and Gaussian noise are fixed across timesteps inside an episode so that
+timestep comparisons are paired. Figure shading shows the standard deviation
+of episode measurements, not a confidence interval.
 
-1. How well does generated visual space preserve cross-class semantic topology?
-2. How well does it preserve within-class PaCo instance topology?
-3. Do the two relation objectives conflict or dominate one another in generator
-   gradient space?
+## Clean AWA2 baseline and diagnosis
 
-Class relations use different-class sample pairs and semantic attributes.
-Instance relations use same-class, different-instance pairs and PaCo features.
-Each topology is normalized by its own positive mean, exactly as in the proposed
-training loss. Samples, latent variables, and Gaussian noise are fixed across
-timesteps inside an episode so that timestep comparisons are paired.
+Run these commands from the repository root. If there is no AWA2 DRG checkpoint,
+train it first:
 
-## Run
+```bash
+python scripts/run_awa2_zerodiff_DRG_train.py
+```
 
-Run the complete small experiment directly from the repository root:
+The AWA2 DFG launcher normally enables a legacy relation loss. Explicitly
+disable it and use a separate output directory for the clean baseline:
+
+```bash
+python scripts/run_awa2_zerodiff_DFG_train.py \
+  --gamma_rel 0 \
+  --run_dir out/AWA2/clean_baseline_seed_9182
+```
+
+Diagnose the saved VCS GZSL checkpoint:
 
 ```bash
 python -m diagnostics.run_baseline \
-  --dataset AWA2 \
-  --dataroot Dataset \
-  --checkpoint out/AWA2/<clean-dfg-checkpoint>.tar \
-  --ways 8 \
-  --shots 8 \
-  --episodes 10 \
-  --seed 9182 \
-  --device cuda:0
+  --dataset AWA2 --dataroot Dataset \
+  --checkpoint out/AWA2/clean_baseline_seed_9182/dfg_gzsl_VCS.tar \
+  --ways 8 --shots 8 --episodes 10 --seed 9182 --device cuda:0
 ```
 
-There is no smoke mode and no separate export/plot sequence. One invocation
-runs inference, computes relation gradients, writes metrics, and refreshes the
-figure.
+Use a new `--run_dir` for a new training run. The diagnostic seed controls
+balanced episode sampling and paired noise, not the DFG training seed.
 
-The default output is deliberately flat:
+## Diagnose another clean checkpoint
+
+```bash
+python -m diagnostics.run_baseline \
+  --dataset AWA2 --dataroot Dataset \
+  --checkpoint out/AWA2/<clean-dfg-checkpoint>.tar \
+  --ways 8 --shots 8 --episodes 10 --seed 9182 --device cuda:0
+```
+
+One invocation writes metrics and these three figures:
 
 ```text
 out/diagnostics/AWA2/
 ├── metrics_seed_9182.csv
+├── diagnosis_a_relation_error.png
+├── diagnosis_b_rank_agreement.png
 └── diagnosis.png
 ```
 
-Running another seed adds one CSV and rebuilds `diagnosis.png` from all
-`metrics_seed_*.csv` files belonging to the same dataset, checkpoint, and
-episode configuration. Running the same seed again replaces that seed's CSV.
-The CSV contains checkpoint/code provenance and run configuration, so no
-separate metadata file is written.
+The first figure shows normalized distance alignment error; the second shows
+Spearman rank agreement; `diagnosis.png` combines the two panels. No gradient
+panel or gradient metrics are produced. The x-axis reports both the generator
+timestep and actual `alpha_bar[t+1]` signal retention.
 
-`diagnosis.png` contains topology alignment error, topology rank fidelity, and
-cross-granularity gradient coordination. The x-axis reports both the ZeroDiff
-generator timestep and the actual `alpha_bar[t+1]` signal retention.
+Running another seed adds one CSV and rebuilds all three figures from matching
+CSV files for the same dataset, checkpoint, and episode configuration. Running
+the same seed again replaces that seed's CSV. Each CSV records checkpoint and
+code provenance along with the run configuration.
 
 ## Baseline isolation and latent source
 
 `checkpoint_guard.py` rejects checkpoints containing relation/VSRA state. The
 diagnostic code never calls `optimizer.step()` and never writes a checkpoint.
 
-New DFG checkpoints save `state_dict_E`, allowing the diagnostic latent to match
-the encoder-conditioned training path. Older clean checkpoints remain usable;
-when the encoder is absent, the runner prints a warning, uses one seeded random
-latent shared by all timesteps, and records `latent_source=seeded_random` in the
-CSV.
-
-The diagnostic seed controls balanced episode sampling and paired random inputs;
-it is not a model-training seed.
+New DFG checkpoints save `state_dict_E`, allowing the diagnostic latent to
+match the encoder-conditioned training path. Older clean checkpoints remain
+usable; when the encoder is absent, the runner prints a warning, uses one
+seeded random latent shared by all timesteps, and records
+`latent_source=seeded_random` in the CSV.

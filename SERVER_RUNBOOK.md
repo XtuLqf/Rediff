@@ -1,32 +1,36 @@
 # Linux 服务器实验手册
 
-第 1.02 版先在 AWA2 跑第 0 节的 **3 个单种子完整实验**验收模块二，后续再补生成器类别/实例项和归一化消融。第 3–7 节保留第 1.07.3 版 legacy 路径的操作记录。本文直接调用已有启动器，不需要新建 Python 或 Shell 文件。方法原理统一见 [RELATION_CONSISTENCY.md](RELATION_CONSISTENCY.md)。
+所有命令在仓库根目录的 Bash 中执行。已有可用环境时只需激活环境；没有对应 DRG 时才运行一次 DRG 启动器。DFG 启动器会自动查找本数据集的 DRG，不必手动输入 DRG 路径或定义函数。三个 DFG 启动器直接运行时默认是 `legacy`，下方 S0/S1/S2 命令显式使用 `sdga`。
 
-所有命令在仓库根目录的 **Bash** 中执行。基线和方法使用同一代码版本，不必为诊断切换分支。
-
-## 日常运行：直接使用启动脚本
-
-已准备好环境和数据时，在仓库根目录执行：
+## 环境与数据
 
 ```bash
-# 仅在没有可用 DRG、或需要重新训练 DRG 时运行
-python scripts/run_awa2_zerodiff_DRG_train.py
-
-# 自动加载 out/AWA2/ 中的 DRG，运行当前启动器默认的 DFG 配置
-python scripts/run_awa2_zerodiff_DFG_train.py
+conda create -n zerodiff python=3.10 -y
+conda activate zerodiff
+python -m pip install --upgrade pip
+pip install torch==2.9.1+cu130 torchvision==0.24.1+cu130 torchaudio==2.9.1+cu130 --index-url https://download.pytorch.org/whl/cu130
+pip install scikit-learn==1.3.0 scipy==1.10.0 numpy==1.24.3 pillow==9.4.0 matplotlib==3.7.5
+nvidia-smi
+python -c "import torch; print(torch.zeros(1, device='cuda'))"
 ```
 
-已有 DRG 时直接运行第二条。DFG 不会重新训练 DRG。默认 DFG 是 legacy 时间感知关系配置（`gamma_rel=1`、`rel_objective=legacy`），不是 S0，也不是关闭关系模块的原始基线。需要基线时只追加 `--gamma_rel 0`；需要 SDGA 时使用下面的 S0/S1/S2 命令。
+每个数据集准备 `Dataset/<DATASET>/res101.mat`、`ce_ce.mat`、`con_paco.mat`，以及 AWA2/SUN 的 `att_splits.mat` 或 CUB 的 `sent_splits.mat`。已有环境无需重复安装。按需训练 DRG：
 
-不需要设置 `DRG`、`COMMON`，也不需要每次执行 `sha256sum` 或 Git 查询。`export CUDA_VISIBLE_DEVICES=0` 仅在需要指定 GPU 时使用，同一终端设置一次即可；已有调度器分配 GPU 时沿用其配置。新终端按需执行 `conda activate rediff`。
+```bash
+python scripts/run_awa2_zerodiff_DRG_train.py
+python scripts/run_cub_zerodiff_DRG_train.py
+python scripts/run_sun_zerodiff_DRG_train.py
+```
 
-模型直接保存到 `out/AWA2/`，日志保存到 `log/AWA2/`，沿用原长文件名并允许覆盖。每次训练结束手动记录结果，再运行下一组。
+## 日常运行
 
-## 0. 第 1.02 版：模块二 SDGA 验收
+直接运行 `python scripts/run_awa2_zerodiff_DFG_train.py`、`python scripts/run_cub_zerodiff_DFG_train.py` 或 `python scripts/run_sun_zerodiff_DFG_train.py`。每条命令独立，不需要先执行变量定义。要运行 SDGA，请复制下方对应数据集和实验的完整命令。
 
-先按第 1–2 节准备好环境、AWA2 数据和同一份 DRG。下面直接使用 AWA2 启动器；显式指定的 DRG 路径现在优先于默认目录查找。
+## SDGA 实验：S0/S1/S2 与验收
 
-### 0.1 S0/S1/S2 的区别
+先准备好环境、对应数据集和该数据集的 DRG。下方命令分别调用三个数据集的启动器；显式指定的 DRG 路径优先于默认目录查找。
+
+### S0/S1/S2 的区别
 
 S0/S1/S2 仅是本文中的实验标签，启动器不再提供 `--experiment` 参数。实验组合直接写在下面的命令中；以后修改文档中的参数值，再复制整条命令运行即可，无需修改 Python 预设或设置 COMMON。
 
@@ -38,11 +42,11 @@ S0/S1/S2 仅是本文中的实验标签，启动器不再提供 `--experiment` �
 
 三组保持校准、16 类 × 4 样本采样和分组时间步一致，使用固定状态权重。S0 不能改用 `gamma_rel=0`，否则校准也会关闭。S0 不是原始 ZeroDiff。S2 按整类混合，类内样本仍处于同一真实状态，不能单凭 S1−S2 推断两个粒度各自的状态效应。
 
-### 0.2 各数据集可直接复制的命令
+### 各数据集可直接复制的命令
 
 每条命令独立运行，不依赖其他命令定义的变量。已显式列出实验采样、关系权重、校准配置和主要运行设置；网络结构、学习率等未列参数沿用各数据集启动器，按需直接追加参数即可覆盖。已有 DRG 时无需重新训练，启动器自动查找对应 `out/<DATASET>/` 中的文件；指定其他文件可追加 `--netR_model_path '实际路径'`。
 
-模型保存到 `out/<DATASET>/`，日志保存到 `log/<DATASET>/`，使用原长文件名，同名覆盖。每组完成后手动记录结果再运行下一组。不会自动创建 ds_reg 子目录，默认不生成 config.json。
+模型保存到 `out/<DATASET>/`，日志保存到 `log/<DATASET>/`，沿用原长文件名并允许同名覆盖。下面九条命令保持原样，每次只复制其中**一条**；运行结束后查看日志、手动记下结果，再运行下一条。不需要先定义 DRG 变量或 Bash 函数。默认不生成 config.json。
 
 **AWA2**
 
@@ -86,9 +90,9 @@ python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga 
 
 ```
 
-### 0.3 验收日志与手动记录
+### 验收日志与结果留存
 
-默认命令请在 `log/AWA2/train_zerodiff_DFG_...log` 中记录每次结果；最佳模型为 `out/AWA2/zerodiff_DFG_...num:5400gzsl_VCS.tar` 等，恢复断点为 `...num:5400_training_last.tar`。关系配置记录在日志中，训练断点保留训练配置及 DRG 校验值。默认平铺输出不生成 `config.json`。
+训练器的 `log/<DATASET>/train_zerodiff_DFG_...log` 文件名不含关系参数，所以运行下一组时会覆盖。最佳模型位于 `out/<DATASET>/zerodiff_DFG_...gzsl_VCS.tar` 等，也会同名覆盖；恢复断点以 `_training_last.tar` 结尾。运行时无需盯着屏幕：该条结束后、下一条开始前打开日志并记录结果即可。
 
 数值正确性的预期：
 
@@ -114,277 +118,84 @@ python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga 
 
 保留负结果。不要从 V/C/VC/VS/VCS 中择最高值作为主表。原评估沿用测试集逐轮最优，并同时比较普通/渐进生成；本版没有新增独立验证集选择协议。单种子结果只用于当前效果筛查，不能据此宣称机制成立或达到 SOTA。
 
-### 0.4 可选消融：首轮之后再运行
-
-复制对应数据集的 S1 完整命令，直接修改下表中的参数值即可，其余参数保持不变：
-
-| 消融 | 在 S1 命令中修改 |
-| --- | --- |
-| 仅类别关系 | `--rel_generator_instance_weight 1` 改为 `--rel_generator_instance_weight 0` |
-| 仅实例关系 | `--rel_generator_class_weight 1` 改为 `--rel_generator_class_weight 0` |
-| 全局归一化 | `--rel_topology_norm timestep` 改为 `--rel_topology_norm global` |
-| 更换种子 | 修改 `--manualSeed` 的值，三组使用相同种子比较 |
-
-不要用 `rel_class_weight=0` / `rel_instance_weight=0` 代替以上 G-only 系数，那会同时改变校准。随机采样对照可用 S1 命令覆盖 `--g_batch_mode random` ；但比较采样收益时也需要给 S0 做同样覆盖。等覆盖时 legacy fixed 与 SDGA 的聚合数学等价，不把它当作应当产生提升的独立创新消融。
-
-### 0.5 中断恢复
-
-复制该次运行使用的完整参数命令，在末尾追加 `--resume_training '实际训练断点路径'`。默认平铺断点在 `out/<DATASET>/` 下，以 `_training_last.tar` 结尾。恢复时保持原实验参数，不要使用最佳模型代替训练断点。
-
-以前保存在独立目录中的 `dfg_training_last.tar` 仍会自动恢复到断点所在目录；显式指定 `--run_dir` 时使用指定目录。
-
-恢复 S0/S2 时必须使用对应系数、分组和目录。checkpoint 保存网络、优化器、最佳指标、全局 RNG 及 P×K/时间步/混合分组三个独立 RNG；校验配置不一致就报错。可以延长 `nepoch`，不能把 S0 恢复成 S1，也不能直接将旧 legacy 断点改成 SDGA。旧断点仅按 legacy 默认含义兼容。
-
-启用周期保存时，最后一轮也会保存。epoch 从 0 编号，检查 `next_epoch`/恢复日志确定进度。崩溃后会从最近保存的 epoch 重算，追加日志可能包含上次失败区间的重复 epoch；手动记录以恢复后完成的最后一组结果为准，不拼接重复 epoch 当作额外训练次数。不要将最佳模型文件当作完整训练断点。
-
-本地实现验证命令（需要 torch、numpy、scipy、scikit-learn、pytest）：
+你给出的 SUN S2 命令使用种子 **6115**；上面恢复的原文 SUN 三条命令使用 **4115**。两者是不同的独立实验。要补齐 6115 的 S2 结果，直接运行：
 
 ```bash
-python -m pytest tests/test_time_aware_relation.py -q
+python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping mixed --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 6115 --nepoch 400 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 400
 ```
 
-第 1.02 版及启动修复在 Python 3.11 / PyTorch 2.9.1 CPU 环境下通过 34 项检查，覆盖数学归约、梯度、采样、启动器参数、实际 D/校准/G 更新、输出目录保护和恢复一致性，以及文档命令的参数解析、默认平铺输出及 CUDA 失败时不创建输出；另核对四种 legacy 关系配置及旧采样器与第 1.01 版逐值一致，手册 Bash 语法检查通过。这些结果不代替 AWA2 的 GPU 完整实验。原干净基线诊断暂不接受这三组带关系参数的模型。
+## 初稿需要的消融
 
-### 0.6 CUDA 初始化失败的处理
+优先比较同协议复现的 ZeroDiff、S0、S1、S2，再以 S1 为基准分别关闭生成器实例项或类别项，并比较 `rel_topology_norm=timestep/global`。这些都有现成参数开关；只改一个参数，其余命令和种子保持一致。P×K 与随机 G batch 的对照应同时给基线做相同采样设置，避免把采样收益算作关系目标收益。S2 是整类混合状态对照，不能单凭它证明类别和实例两种状态效应。
 
-本次服务器反馈：训练报 `Error 804`，同时 `nvidia-smi` 报 `Failed to initialize NVML: Driver/library version mismatch`，NVML 库版本为 `580.178`。这说明需要先修复系统 NVIDIA 驱动与库版本不一致的问题。驱动更新后未重启是可能原因；NVIDIA 文档说明这类情况需要重启完成驱动加载：[官方说明](https://docs.nvidia.com/dgx/dgx-el9-user-guide/upgrading.html)。
+当前 `gamma_rel=0` 会同时关闭关系校准和生成器关系项；仅生成器项可用 `rel_generator_class_weight` / `rel_generator_instance_weight` 单独关闭。SDGA 当前强制固定状态权重，真正的粒度感知状态重加权还需要在 `relation/vsra.py`、`relation/topology.py` 和 `config_zerodiff.py` 增加块间加权与开关；方法前后关系诊断也需要新的方法模型入口。消融表中的 ZeroDiff 基线使用**本仓库同设置复现值**；原论文数值单独注明来源，不与本地消融行混算增益。
 
-确认机器可以重启、其他任务已妥善停止后，由有权限的人执行：
+## 本轮搜参：两个参数、九条独立命令
+
+根据已有多种子记录，S1 相对 S0 在 AWA2、CUB、SUN 上没有稳定的同向增益。本轮先只调整 **2 个参数**：`rel_generator_class_weight`（生成器类别关系系数）和 `rel_generator_instance_weight`（生成器实例关系系数）。其余设置完全沿用上面的 S1，包括 `gamma_rel=1`、matched、P×K 和 timestep 归一化。这样可以先判断关系约束是否过强，以及哪种粒度更需要降低权重。
+
+每个数据集新增 **3 次训练**，总共 **9 次**；已做过的 S0 `(0,0)`、S1 `(1,1)` 直接用同种子记录，不重复运行。本轮三种候选是 `(0.5,0.5)`、`(0.5,1)`、`(1,0.5)`。先不搜 `gamma_rel`、投影维度、归一化方式或训练主干参数。若这三组仍无稳定收益，再根据结果决定下一轮，不预先扩成大网格。
+
+**操作方式：每次只复制下面的一个代码块。** 它就是一条完整 Python 命令，执行后立即开始该次训练；无需运行任何准备函数、循环、`set -o pipefail` 或 `tee`。等它结束，打开 `log/<DATASET>/train_zerodiff_DFG_...log`，将同一行 `best GZSL (VCS)` 的 U/S/H 和 `best ZSL (VCS)` 的 T1 记入你的结果文档，再运行下一条。下一条会覆盖平铺 log 和 tar，因此必须先记录；运行过程不必一直看着终端。这里使用你多种子记录中最近一组 S0 注释的种子：AWA2=11182、CUB=5483、SUN=6115；同组 S1 是否也是该种子，以实际训练日志为准。
+
+### AWA2：使用种子 11182
+
+**AWA2-A：类别 0.5，实例 0.5**
 
 ```bash
-sudo reboot
+python scripts/run_awa2_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0.5 --rel_generator_instance_weight 0.5 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 11182 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 5400
 ```
 
-重新连接服务器，先验证 GPU：
+**AWA2-B：类别 0.5，实例 1**
 
 ```bash
-nvidia-smi
-conda activate rediff
-python -c "import torch; print(torch.zeros(1, device='cuda'))"
+python scripts/run_awa2_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0.5 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 11182 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 5400
 ```
 
-两项成功后才启动实验。若重启后 `nvidia-smi` 仍失败，记录 `cat /proc/driver/nvidia/version` 和 `modinfo -F version nvidia` 的输出，再处理内核模块与用户态驱动安装。若 `nvidia-smi` 恢复但 PyTorch 仍失败，再核对加载的 CUDA 库；仅凭 `LD_LIBRARY_PATH` 含 `cuda-12.1/lib64`，不能认定必须重装 PyTorch。启动修复不能替代服务器驱动修复。
-
-## 1. 环境与数据
-
-已有可用环境可直接激活。以下沿用原服务器环境组合，本次没有重新安装验证：
+**AWA2-C：类别 1，实例 0.5**
 
 ```bash
-conda create -n zerodiff python=3.10 -y
-conda activate zerodiff
-python -m pip install --upgrade pip
-pip install torch==2.9.1+cu130 torchvision==0.24.1+cu130 torchaudio==2.9.1+cu130 --index-url https://download.pytorch.org/whl/cu130
-pip install scikit-learn==1.3.0 scipy==1.10.0 numpy==1.24.3 pillow==9.4.0 matplotlib==3.7.5
+python scripts/run_awa2_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 0.5 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 11182 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 5400
 ```
 
-每个数据集需要 `Dataset/<DATASET>/res101.mat`、`ce_ce.mat`、`con_paco.mat`，以及 AWA2/SUN 的 `att_splits.mat` 或 CUB 的 `sent_splits.mat`。现有 `check_dataset_mats.sh` 统一检查 `att`，不能据此确认 CUB 的 `sent` 已准备好。
+### CUB：使用种子 5483
 
-以下变量与检查仅供第 3–7 节历史实验使用；日常运行和第 0 节显式参数实验无需设置：
+**CUB-A：类别 0.5，实例 0.5**
 
 ```bash
-export CUDA_VISIBLE_DEVICES=0
-DATASET=AWA2
-DS=awa2
-SEED=9182
-SEMANTIC=att
-LAUNCHER="scripts/run_${DS}_zerodiff_DFG_train.py"
-
-for name in res101.mat ce_ce.mat con_paco.mat "${SEMANTIC}_splits.mat"; do
-  test -f "Dataset/$DATASET/$name" || echo "缺少 Dataset/$DATASET/$name"
-done
-git rev-parse HEAD
-git status --short
+python scripts/run_cub_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0.5 --rel_generator_instance_weight 0.5 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 5483 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 1440
 ```
 
-如果报告缺少文件，先补齐。换数据集时按下表重设变量，再重新执行 `LAUNCHER` 赋值和文件检查：
-
-| 数据集 | Bash 变量设置 | DFG 训练长度 / 评估间隔 |
-| --- | --- | --- |
-| AWA2 | `DATASET=AWA2; DS=awa2; SEED=9182; SEMANTIC=att` | 300 / 5 epochs |
-| CUB | `DATASET=CUB; DS=cub; SEED=3483; SEMANTIC=sent` | 300 / 5 epochs |
-| SUN | `DATASET=SUN; DS=sun; SEED=4115; SEMANTIC=att` | 400 / 5 epochs |
-
-本轮不修改训练长度、合成样本数、特征、评估间隔，不重提取特征。
-
-## 2. 固定同一份 DRG（历史实验的可选显式配置）
-
-已有兼容的本数据集 100% DRG 就复用，没有时执行一次：
+**CUB-B：类别 0.5，实例 1**
 
 ```bash
-python "scripts/run_${DS}_zerodiff_DRG_train.py"
+python scripts/run_cub_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0.5 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 5483 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 1440
 ```
 
-查看候选文件，选定本数据集、100% 配置对应的同一份 checkpoint：
+**CUB-C：类别 1，实例 0.5**
 
 ```bash
-find "out/$DATASET" -maxdepth 1 -type f \( -name '*DRG*.tar' -o -name 'diffzero_pretrain*.tar' \) -print
-
-# 将下方路径替换为确认过的真实 DRG 文件。
-DRG='out/AWA2/替换为实际DRG文件名.tar'
-test -f "$DRG" && sha256sum "$DRG"
+python scripts/run_cub_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 0.5 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 5483 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 1440
 ```
 
-确认路径存在后继续。不要选 DFG 或低比例训练文件；切换数据集必须重设 `DRG`。全部对照固定同一 DRG 路径、文件内容和 DFG 种子。
+### SUN：使用种子 6115
 
-当前 DFG 启动器优先使用显式的 `--netR_model_path`；未指定时自动查找默认候选。第 0 节显式参数命令无需设置此处的 Bash 变量。
-
-## 3. 历史 legacy 实验：M0/M2/M5（按需参考）
-
-按 M0 → M2 → M5 顺序串行运行，每条训练结束后再运行下一条。尾部标量参数会覆盖启动器默认值。
-
-| 编号 | 实验 | 目的 |
-| --- | --- | --- |
-| M0 | 无关系约束 | 当前分支的基线 |
-| M2 | 固定双拓扑、全局归一化 | 固定关系目标参照 |
-| M5 | 完整方法 | 检查相对基线和固定双拓扑的增益 |
-
-### M0：无关系约束基线
+**SUN-A：类别 0.5，实例 0.5**
 
 ```bash
-python "$LAUNCHER" \
-  --netR_model_path "$DRG" --manualSeed "$SEED" \
-  --gamma_rel 0
+python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0.5 --rel_generator_instance_weight 0.5 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 5115 --nepoch 400 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 400
 ```
 
-### M2：固定双拓扑
+**SUN-B：类别 0.5，实例 1**
 
 ```bash
-python "$LAUNCHER" \
-  --netR_model_path "$DRG" --manualSeed "$SEED" \
-  --gamma_rel 1 --rel_time_pair_weight 1 \
-  --rel_time_mode fixed --rel_time_strength 0 \
-  --rel_reliability_floor 0.5 --rel_topology_norm global
+python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0.5 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 5115 --nepoch 400 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 400
 ```
 
-### M5：完整方法
+**SUN-C：类别 1，实例 0.5**
 
 ```bash
-python "$LAUNCHER" \
-  --netR_model_path "$DRG" --manualSeed "$SEED" \
-  --gamma_rel 1 --rel_time_pair_weight 1 \
-  --rel_time_mode diffusion_reliability --rel_time_strength 0.5 \
-  --rel_reliability_floor 0.5 --rel_topology_norm timestep
+python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 0.5 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 5115 --nepoch 400 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 400
 ```
 
-未覆盖的关系参数沿用启动器：类别/实例权重均为 1、投影维度 512、教师锚定权重 1、距离/角度系数 1/2。首轮只需 **3 次 DFG 完整训练**，加上至多 1 次 DRG 准备。
-
-**输出覆盖：** 当前代码的日志在 `log/<DATASET>/`，权重在 `out/<DATASET>/`，不再附加关系配置后缀。这些实验会使用相同文件名，按顺序运行并手动记录结果即可；需要保留某份模型时自行另存。
-
-## 4. 按需追加三个对照
-
-需要解释差异来源时再补这三组，首轮不必执行。
-
-### M1：静态 VSRA
-
-```bash
-python "$LAUNCHER" \
-  --netR_model_path "$DRG" --manualSeed "$SEED" \
-  --gamma_rel 1 --rel_time_pair_weight 0
-```
-
-与 M0 比较静态约束，与 M5 比较静态/动态方案。后者还包含时间步采样变化，不是单项损失消融。
-
-### M3：仅时间步归一化
-
-```bash
-python "$LAUNCHER" \
-  --netR_model_path "$DRG" --manualSeed "$SEED" \
-  --gamma_rel 1 --rel_time_pair_weight 1 \
-  --rel_time_mode fixed --rel_time_strength 0 \
-  --rel_reliability_floor 0.5 --rel_topology_norm timestep
-```
-
-### M4：仅可靠性加权
-
-```bash
-python "$LAUNCHER" \
-  --netR_model_path "$DRG" --manualSeed "$SEED" \
-  --gamma_rel 1 --rel_time_pair_weight 1 \
-  --rel_time_mode diffusion_reliability --rel_time_strength 0.5 \
-  --rel_reliability_floor 0.5 --rel_topology_norm global
-```
-
-M2—M5 构成 2×2 对照：M3−M2 看归一化的贡献，M4−M2 看可靠性加权的贡献；M5−M3、M5−M4 检查组合后的边际效果。无论结果正负都记录，不预设主方法一定获胜。
-
-更后续的消融可在 M5 命令末尾**一次只追加一行**下表覆盖，当前无需批量执行：
-
-| 消融 | 追加参数 | 解释边界 |
-| --- | --- | --- |
-| 去掉语义项 | `--rel_class_weight 0` | 同时改变校准和生成器 |
-| 去掉对比项 | `--rel_instance_weight 0` | 同时改变校准和生成器 |
-| 去掉教师锚定 | `--rel_teacher_anchor_weight 0` | PaCo 投影器失去训练来源；与 M5 输出同名，先备份 |
-| 去掉角度校准 | `--rel_angle_ratio 0` | eta=1 时只移除校准角度项；与 M5 输出同名，先备份 |
-| 静态/动态混合 | `--rel_time_pair_weight 0.5` | 凸组合，不保证等损失幅度 |
-| 旧线性调度 | `--rel_time_mode class_up_instance_down` | 保持其余 M5 配置，仅比较调度方式 |
-
-参数网格、三种子和三数据集批量实验暂缓。需要补重复时，固定 DRG，使用本数据集原种子及加 10000、20000 的两个种子；各运行先另存输出，再启动下一种子。基线与固定双拓扑也要补重复，不能只重复首轮最优方法。
-
-## 5. 查看结果
-
-训练自动评估并保存最佳模型，不需要新建评估脚本。
-
-```bash
-find "log/$DATASET" -maxdepth 1 -type f -name '*DFG*.log' -print
-
-# 替换为需要查看的某一次运行日志。
-LOG='log/AWA2/替换为实际日志文件名.log'
-grep -E 'best GZSL|best ZSL' "$LOG" | tail -n 10
-```
-
-固定以 VCS 为主表，不从多个视角挑最高值：
-
-| 实验 | 种子 | GZSL U | GZSL S | GZSL H | ZSL T1 |
-| --- | --- | --- | --- | --- | --- |
-| M0 | 9182 | 待填 | 待填 | 待填 | 待填 |
-| M2 | 9182 | 待填 | 待填 | 待填 | 待填 |
-| M5 | 9182 | 待填 | 待填 | 待填 | 待填 |
-
-取最后一组 `best GZSL (VCS)` 中最高 H 对应的 U/S/H，不能独立挑 U 和 S 最高值；`best ZSL (VCS)` 是单独选择的 T1，不一定来自同一轮。代码输出小数，转百分数时整表统一乘 100。V、C、VC、VS 可作为附加结果。
-
-保留代码版本、DRG 路径及校验值、种子和完整命令。关系日志还包含有效类别/实例对数与各关系项损失；实例有效对不足时，应结合这一点解释消融结果。
-
-先比较 M5−M0 和 M5−M2 的 H，再看 U/S 的变化。单种子只用于初步观察。当前代码逐轮在测试集评估并保存最优，`--validation` 没有实现独立验证划分；沿用该协议时应明确这一限制，不把这些对照称为验证集调参，也不据此替换预先固定的主方法参数。
-
-## 6. 可选：干净基线诊断
-
-首轮看分类效果不必先做诊断。需要观察时间步拓扑误差、秩保真度和梯度关系时，从 M0 选择干净 DFG checkpoint：
-
-```bash
-find "out/$DATASET" -maxdepth 1 -type f -name '*gzsl_VCS.tar' -print
-
-# 替换为 M0 的文件，不要选择名称含 tvsra 的方法模型。
-CLEAN_DFG='out/AWA2/替换为M0的gzsl_VCS文件名.tar'
-python -m diagnostics.run_baseline \
-  --dataset "$DATASET" --dataroot Dataset --checkpoint "$CLEAN_DFG" \
-  --ways 8 --shots 8 --episodes 10 --seed 9182 --device cuda:0
-```
-
-一次调用完成配对时间步推理、梯度测量、CSV 和绘图，默认输出：
-
-```text
-out/diagnostics/<DATASET>/
-├── metrics_seed_9182.csv
-└── diagnosis.png
-```
-
-增加采样时，将同一命令的 `--seed` 改为 19182 或 29182。它们是 episode 采样种子，不是独立训练种子。同种子重跑覆盖 CSV，不同种子增加 CSV，图只聚合 checkpoint 和配置相容的记录。
-
-诊断器拒绝含关系/VSRA 参数的模型。新干净模型包含 `state_dict_E`，使用编码器条件潜变量；旧模型缺少编码器时会警告并使用固定种子的随机潜变量。旧 `baseline/`、`smoke/`、`topology_v2/`、`trajectory/`、`gradients/` 等布局不再被当前代码读取，本轮无需删除历史文件。
-
-## 7. 中断恢复
-
-训练默认每 5 epochs 原子保存 `_training_last.tar`。用中断实验的完整原参数追加 `--resume_training`；以下仅示范恢复 M5：
-
-```bash
-RESUME='out/AWA2/替换为M5的_training_last.tar'
-python "$LAUNCHER" \
-  --netR_model_path "$DRG" --manualSeed "$SEED" \
-  --gamma_rel 1 --rel_time_pair_weight 1 \
-  --rel_time_mode diffusion_reliability --rel_time_strength 0.5 \
-  --rel_reliability_floor 0.5 --rel_topology_norm timestep \
-  --resume_training "$RESUME"
-```
-
-恢复其他组时使用各自原命令，不能直接套用 M5。第 1.02 版生成的完整断点增加训练配置检查；历史断点没有这些字段时，仅能检查其已保存的关系配置，DRG、数据、种子和其他旧参数仍需手动核对。
-
-不要传入 `gzsl*.tar` 或 `zsl*.tar` 模型选择文件，它们没有完整优化器状态。当前恢复器也兼容 v1.06 的每可见 GPU RNG 列表，并转换为所用设备的 CPU ByteTensor RNG 状态。
+九条跑完后，先在各数据集内比较同种子的 S0、S1 和本轮三组。优先看 GZSL VCS 的 H，同时保留 U/S 和 ZSL VCS T1；不要从不同视角中择最高值。只把有希望的组合用另外两个现有种子复核，再考虑扩大参数范围。当前训练代码按测试集最佳 epoch 报分，因此这仍属于探索性搜参；论文最终选参和报告需要独立验证协议。

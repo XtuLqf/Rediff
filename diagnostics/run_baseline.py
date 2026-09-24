@@ -1,13 +1,12 @@
-"""Run the paper-aligned ZeroDiff baseline diagnosis in one command."""
+"""Diagnose dual-granularity relations in a frozen ZeroDiff baseline."""
 
 from __future__ import annotations
 
 import argparse
 import csv
-import math
 import subprocess
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Sequence
 
 import matplotlib
 
@@ -32,8 +31,8 @@ COLORS = {"class": "#1f77b4", "instance": "#d62728"}
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Measure time-dependent class-semantic and instance-contrastive "
-            "topology behavior on a clean ZeroDiff checkpoint."
+            "Measure cross-class and within-class relations across diffusion "
+            "states on a clean ZeroDiff checkpoint."
         )
     )
     parser.add_argument("--dataset", choices=("AWA2", "CUB", "SUN"), required=True)
@@ -64,60 +63,6 @@ def git_head() -> str:
         ).strip()
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
-
-
-def parameter_gradients(
-    loss: torch.Tensor,
-    parameters: Sequence[torch.nn.Parameter],
-    retain_graph: bool,
-) -> Tuple[Optional[torch.Tensor], ...]:
-    return torch.autograd.grad(
-        loss,
-        parameters,
-        retain_graph=retain_graph,
-        create_graph=False,
-        allow_unused=True,
-    )
-
-
-def gradient_pair_statistics(
-    left: Iterable[Optional[torch.Tensor]],
-    right: Iterable[Optional[torch.Tensor]],
-) -> Tuple[float, float, float, float]:
-    left_square_terms = []
-    right_square_terms = []
-    dot_terms = []
-    for left_gradient, right_gradient in zip(left, right):
-        if left_gradient is not None:
-            left_square_terms.append(left_gradient.detach().square().sum())
-        if right_gradient is not None:
-            right_square_terms.append(right_gradient.detach().square().sum())
-        if left_gradient is not None and right_gradient is not None:
-            dot_terms.append(
-                (left_gradient.detach() * right_gradient.detach()).sum()
-            )
-
-    left_square = (
-        float(torch.stack(left_square_terms).sum().cpu())
-        if left_square_terms
-        else 0.0
-    )
-    right_square = (
-        float(torch.stack(right_square_terms).sum().cpu())
-        if right_square_terms
-        else 0.0
-    )
-    dot = float(torch.stack(dot_terms).sum().cpu()) if dot_terms else 0.0
-    left_norm = math.sqrt(left_square)
-    right_norm = math.sqrt(right_square)
-    denominator = left_norm * right_norm
-    cosine = dot / denominator if denominator > 0.0 else float("nan")
-    log_ratio = (
-        math.log10(left_norm / right_norm)
-        if left_norm > 0.0 and right_norm > 0.0
-        else float("nan")
-    )
-    return left_norm, right_norm, cosine, log_ratio
 
 
 def write_metric_rows(path: Path, rows: Sequence[Dict[str, object]]) -> None:
@@ -164,17 +109,12 @@ def plot_summary(axis, summary, label: str, color: str) -> None:
     )
 
 
-def plot_diagnosis(
-    rows: Sequence[Dict[str, str]],
-    output: Path,
-) -> None:
+def plot_diagnosis(rows: Sequence[Dict[str, str]], output_dir: Path) -> List[Path]:
     keys = (
         "class_relation_loss",
         "instance_relation_loss",
         "class_relation_spearman",
         "instance_relation_spearman",
-        "cos_class_instance",
-        "log_class_instance_grad_ratio",
         "signal_retention",
     )
     summaries = {key: aggregate_by_timestep(rows, key) for key in keys}
@@ -188,72 +128,60 @@ def plot_diagnosis(
         f"{timestep}\n{value:.3f}" for timestep, value in zip(timesteps, retention)
     ]
 
-    figure, axes = plt.subplots(1, 3, figsize=(15.6, 4.7), constrained_layout=True)
-    plot_summary(
-        axes[0],
-        summaries["class_relation_loss"],
-        "Class-semantic",
-        COLORS["class"],
-    )
-    plot_summary(
-        axes[0],
-        summaries["instance_relation_loss"],
-        "Instance-contrastive",
-        COLORS["instance"],
-    )
-    axes[0].set_title("(a) Topology alignment error")
-    axes[0].set_ylabel("Normalized Smooth-L1 error (lower is better)")
-
-    plot_summary(
-        axes[1],
-        summaries["class_relation_spearman"],
-        "Class-semantic",
-        COLORS["class"],
-    )
-    plot_summary(
-        axes[1],
-        summaries["instance_relation_spearman"],
-        "Instance-contrastive",
-        COLORS["instance"],
-    )
-    axes[1].set_title("(b) Reference-topology fidelity")
-    axes[1].set_ylabel("Spearman consistency (higher is better)")
-
-    plot_summary(
-        axes[2],
-        summaries["cos_class_instance"],
-        "Gradient cosine",
-        "#9467bd",
-    )
-    axes[2].axhline(0.0, color="black", linewidth=1, linestyle="--")
-    axes[2].set_title("(c) Cross-granularity coordination")
-    axes[2].set_ylabel("Class-instance gradient cosine", color="#9467bd")
-    ratio_axis = axes[2].twinx()
-    plot_summary(
-        ratio_axis,
-        summaries["log_class_instance_grad_ratio"],
-        "log10 class/instance norm",
-        "#7f7f7f",
-    )
-    ratio_axis.axhline(0.0, color="#7f7f7f", linewidth=1, linestyle=":")
-    ratio_axis.set_ylabel("log10 gradient-norm ratio", color="#7f7f7f")
-
-    for axis in axes:
+    def configure_axis(axis) -> None:
         axis.set_xlabel("Diffusion timestep t\nsignal retention alpha_bar[t+1]")
         axis.set_xticks(timesteps, tick_labels)
         axis.grid(alpha=0.25)
-    axes[0].legend(frameon=False)
-    axes[1].legend(frameon=False)
-    handles, labels = axes[2].get_legend_handles_labels()
-    ratio_handles, ratio_labels = ratio_axis.get_legend_handles_labels()
-    axes[2].legend(handles + ratio_handles, labels + ratio_labels, frameon=False)
 
-    figure.suptitle(
-        "Frozen ZeroDiff: time-aware class/instance topology diagnosis"
+    def draw_error(axis) -> None:
+        plot_summary(
+            axis, summaries["class_relation_loss"],
+            "Cross-class semantic", COLORS["class"],
+        )
+        plot_summary(
+            axis, summaries["instance_relation_loss"],
+            "Within-class PaCo", COLORS["instance"],
+        )
+        axis.set_title("(a) Relation alignment error")
+        axis.set_ylabel("Normalized distance error (Smooth L1)")
+        configure_axis(axis)
+        axis.legend(frameon=False)
+
+    def draw_rank(axis) -> None:
+        plot_summary(
+            axis, summaries["class_relation_spearman"],
+            "Cross-class semantic", COLORS["class"],
+        )
+        plot_summary(
+            axis, summaries["instance_relation_spearman"],
+            "Within-class PaCo", COLORS["instance"],
+        )
+        axis.set_title("(b) Relation rank agreement")
+        axis.set_ylabel("Spearman correlation (higher is better)")
+        configure_axis(axis)
+        axis.legend(frameon=False)
+
+    title = "Frozen ZeroDiff: dual-granularity relation diagnostics"
+    figures = (
+        ("diagnosis_a_relation_error.png", (draw_error,), (6.8, 4.8)),
+        ("diagnosis_b_rank_agreement.png", (draw_rank,), (6.8, 4.8)),
+        ("diagnosis.png", (draw_error, draw_rank), (12.8, 4.8)),
     )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(output, dpi=240, bbox_inches="tight")
-    plt.close(figure)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for filename, drawers, size in figures:
+        figure, axes = plt.subplots(
+            1, len(drawers), figsize=size, constrained_layout=True,
+        )
+        axes = np.atleast_1d(axes)
+        for axis, draw in zip(axes, drawers):
+            draw(axis)
+        figure.suptitle(title)
+        path = output_dir / filename
+        figure.savefig(path, dpi=240, bbox_inches="tight")
+        plt.close(figure)
+        paths.append(path)
+    return paths
 
 
 def main() -> None:
@@ -270,7 +198,6 @@ def main() -> None:
     code_commit = git_head()
     output_dir = args.output_dir or Path("out") / "diagnostics" / args.dataset
     csv_path = output_dir / f"metrics_seed_{args.seed}.csv"
-    figure_path = output_dir / "diagnosis.png"
 
     if runtime.latent_source == "seeded_random":
         print(
@@ -278,9 +205,6 @@ def main() -> None:
             "latent. This is recorded in the metrics CSV."
         )
 
-    parameters = [
-        parameter for parameter in runtime.netG.parameters() if parameter.requires_grad
-    ]
     rows: List[Dict[str, object]] = []
     for episode_id in range(args.episodes):
         print(f"Episode {episode_id + 1}/{args.episodes}", flush=True)
@@ -296,35 +220,27 @@ def main() -> None:
         )
 
         for timestep in range(options.n_T):
-            prediction = runtime.predict_x0(
-                episode.visual,
-                episode.contrastive,
-                episode.attributes,
-                timestep,
-                latent,
-                shared_noise,
-            )
-            diagnostics = relation_diagnostics(
-                prediction,
-                episode.attributes,
-                episode.contrastive,
-                episode.labels,
-            )
+            with torch.no_grad():
+                prediction = runtime.predict_x0(
+                    episode.visual,
+                    episode.contrastive,
+                    episode.attributes,
+                    timestep,
+                    latent,
+                    shared_noise,
+                )
+                diagnostics = relation_diagnostics(
+                    prediction,
+                    episode.attributes,
+                    episode.contrastive,
+                    episode.labels,
+                )
             class_loss = diagnostics["class_loss"]
             instance_loss = diagnostics["instance_loss"]
             if not isinstance(class_loss, torch.Tensor) or not isinstance(
                 instance_loss, torch.Tensor
             ):
-                raise TypeError("Topology losses must be tensors.")
-            class_gradients = parameter_gradients(
-                class_loss, parameters, retain_graph=True
-            )
-            instance_gradients = parameter_gradients(
-                instance_loss, parameters, retain_graph=False
-            )
-            class_norm, instance_norm, gradient_cosine, log_norm_ratio = (
-                gradient_pair_statistics(class_gradients, instance_gradients)
-            )
+                raise TypeError("Relation losses must be tensors.")
 
             signal_retention = float(
                 runtime.relation_signal_retention[timestep].detach().cpu()
@@ -353,15 +269,11 @@ def main() -> None:
                     "instance_relation_loss": float(instance_loss.detach().cpu()),
                     "class_relation_spearman": diagnostics["class_spearman"],
                     "instance_relation_spearman": diagnostics["instance_spearman"],
-                    "class_gradient_norm": class_norm,
-                    "instance_gradient_norm": instance_norm,
-                    "cos_class_instance": gradient_cosine,
-                    "log_class_instance_grad_ratio": log_norm_ratio,
                 }
             )
 
     write_metric_rows(csv_path, rows)
-    plot_diagnosis(
+    figure_paths = plot_diagnosis(
         compatible_metric_rows(
             output_dir,
             args.dataset,
@@ -370,10 +282,11 @@ def main() -> None:
             args.ways,
             args.shots,
         ),
-        figure_path,
+        output_dir,
     )
     print(csv_path.resolve())
-    print(figure_path.resolve())
+    for figure_path in figure_paths:
+        print(figure_path.resolve())
 
 
 if __name__ == "__main__":
