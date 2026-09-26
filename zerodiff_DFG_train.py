@@ -19,7 +19,7 @@ import zerodiff_tools
 from sklearn import preprocessing
 import numpy as np
 import os
-from relation import TimeAwareVSRA, sample_relation_group_timesteps
+from relation import StateAwareRelationAlignment, sample_relation_group_timesteps
 from relation.timestep_schedule import mixed_relation_groups
 
 faulthandler.enable(all_threads=True)
@@ -79,21 +79,11 @@ relation_run_config = {
     'g_pk_samples': opt.g_pk_samples if opt.g_batch_mode == 'pk' else 0,
     'g_timestep_policy': opt.g_timestep_policy,
     'pair_grouping': opt.rel_pair_grouping,
+    'gsr_mode': opt.rel_gsr_mode,
+    'gsr_class_power': opt.rel_gsr_class_power,
+    'gsr_instance_power': opt.rel_gsr_instance_power,
+    'gsr_floor': opt.rel_gsr_floor,
 }
-
-
-def normalized_relation_config(config):
-    """Expand old checkpoint defaults without allowing a new objective on resume."""
-    config = dict(config or {})
-    defaults = {
-        'objective': 'legacy', 'generator_class_weight': config.get('class_weight'),
-        'generator_instance_weight': config.get('instance_weight'),
-        'g_batch_mode': 'random', 'g_pk_classes': 0, 'g_pk_samples': 0,
-        'g_timestep_policy': 'auto', 'pair_grouping': 'matched',
-    }
-    for key, value in defaults.items():
-        config.setdefault(key, value)
-    return config
 
 
 new_relation_behavior = (
@@ -118,7 +108,7 @@ if opt.run_dir:
     model_save_name = os.path.join(opt.run_dir, 'dfg')
 logger = Logger(logger_name, append=bool(opt.resume_training))
 if opt.gamma_rel > 0:
-    relation_config_record = "TimeAwareVSRA configuration: " + str(relation_run_config)
+    relation_config_record = "StateAwareRelationAlignment configuration: " + str(relation_run_config)
     print(relation_config_record)
     logger.write(relation_config_record + '\n')
 
@@ -339,12 +329,15 @@ def load_training_state(zerodiff, checkpoint_path):
         map_location=zerodiff.device,
         weights_only=False,
     )
-    if normalized_relation_config(checkpoint.get('relation_config')) != relation_run_config:
+    if checkpoint.get('relation_config') != relation_run_config:
         raise ValueError(
-            "Resume checkpoint relation configuration does not match this run."
+            "Resume checkpoint relation configuration does not match this run. "
+            "Old DFG configurations are not migrated; start a new DFG run."
         )
     saved_config = checkpoint.get('training_config')
-    if saved_config is not None and saved_config != training_run_config:
+    if not isinstance(saved_config, dict):
+        raise ValueError('Resume checkpoint is missing training configuration; start a new DFG run.')
+    if saved_config != training_run_config:
         differences = sorted(key for key in set(saved_config) | set(training_run_config)
                              if saved_config.get(key) != training_run_config.get(key))
         raise ValueError('Resume training configuration differs: ' + ', '.join(differences))
@@ -434,7 +427,7 @@ class ZERODIFF(torch.nn.Module):
         self.time_aware_vsra = None
         self.optimizerVSRA = None
         if self.relationship_enabled:
-            self.time_aware_vsra = TimeAwareVSRA(
+            self.time_aware_vsra = StateAwareRelationAlignment(
                 n_timesteps=self.n_T,
                 visual_dim=self.dim_v,
                 contrastive_dim=2048,
@@ -458,6 +451,10 @@ class ZERODIFF(torch.nn.Module):
                 objective=opt.rel_objective,
                 generator_class_weight=opt.rel_generator_class_weight,
                 generator_instance_weight=opt.rel_generator_instance_weight,
+                gsr_mode=opt.rel_gsr_mode,
+                gsr_class_power=opt.rel_gsr_class_power,
+                gsr_instance_power=opt.rel_gsr_instance_power,
+                gsr_floor=opt.rel_gsr_floor,
             ).to(self.device)
             self.optimizerVSRA = optim.Adam(
                 self.time_aware_vsra.parameters(),
@@ -543,7 +540,7 @@ class ZERODIFF(torch.nn.Module):
         return D_cost, Wasserstein_D, distill_loss, G_cost, vae_loss_seen
 
     def update_relation_space(self, x_0_real, con_0_real, att_0_real):
-        """Calibrate the VSRA projectors on real data before constraining G."""
+        """Calibrate the RSC projectors on real data before constraining G."""
         for parameter in self.time_aware_vsra.parameters():
             parameter.requires_grad = True
         self.optimizerVSRA.zero_grad()
@@ -793,6 +790,7 @@ class ZERODIFF(torch.nn.Module):
         if any(not torch.isfinite(value).all() for value in metrics.values()):
             raise FloatingPointError('Non-finite SDGA block metrics at epoch %d' % epoch)
         return {'epoch': epoch, 'grouping': opt.rel_pair_grouping,
+                'gsr_mode': opt.rel_gsr_mode,
                 'updates': self.relation_block_updates,
                 'signal_retention_by_generation_state': self.prior_coefficients.sqrt_alphas_bar[1:self.n_T + 1].square().detach().cpu().tolist(),
                 **{key: value.cpu().tolist() for key, value in metrics.items()}}
@@ -1015,7 +1013,7 @@ for epoch in range(start_epoch, opt.nepoch):
 
     if zerodiff.relationship_enabled:
         log_record = (
-            '[%d/%d] VSRA calibration semantic/con: %.6f/%.6f, '
+            '[%d/%d] RSC calibration semantic/con: %.6f/%.6f, '
             'teacher anchor: %.6f'
             % (
                 epoch,

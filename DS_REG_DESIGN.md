@@ -1,5 +1,11 @@
 # DS-ReG 研究目标与贡献设计
 
+当前增量：模块三 GSR 已接入 SDGA 状态块，支持 fixed/shared/granularity，
+两类幂指数独立设置、完整日程均值归一化、分块贡献日志及断点配置检查。
+下文版本记录保留为设计历史；模块三分类收益仍待服务器实验。
+本轮沿用 ZeroDiff 现有数据划分与分类评估流程，诊断代码仅保留为研究动机参考，
+不实施下文提出的方法诊断扩展。实现公式见 RELATION_CONSISTENCY.md，命令见 SERVER_RUNBOOK.md。
+
 ## 1. 分支来源与本版范围
 
 - 新分支：`codex/ds-reg`。

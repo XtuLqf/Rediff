@@ -1,6 +1,6 @@
-"""Time-aware visual-semantic relation alignment for ZeroDiff."""
+"""State-aware relational alignment for ZeroDiff: RSC, SDGA and GSR."""
 
 from .timestep_schedule import sample_relation_group_timesteps
-from .vsra import TimeAwareVSRA
+from .alignment import StateAwareRelationAlignment
 
-__all__ = ["TimeAwareVSRA", "sample_relation_group_timesteps"]
+__all__ = ["StateAwareRelationAlignment", "sample_relation_group_timesteps"]

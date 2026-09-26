@@ -1,4 +1,4 @@
-"""Terminal VSRA with an optional vectorized time-aware pair correction."""
+"""RSC calibration, SDGA alignment and GSR weighting, with legacy objectives."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from .timestep_schedule import sample_relation_weights
-from .topology import relation_alignment_components, time_aware_pair_losses, sdga_pair_losses
+from .timestep_schedule import sample_relation_weights, state_reweighting_schedule
+from .losses import relation_alignment_components, time_aware_pair_losses, sdga_pair_losses, reduce_valid_blocks
 
 
 class RelationProjector(nn.Module):
-    """Map a modality into the stable relation space used by VSRA."""
+    """Map visual or contrastive features into the calibrated relation space."""
 
     def __init__(self, input_dim: int, output_dim: int) -> None:
         super().__init__()
@@ -39,8 +39,8 @@ class RelationProjector(nn.Module):
         return F.normalize(self.model(features), p=2, dim=1)
 
 
-class TimeAwareVSRA(nn.Module):
-    """Calibrate VSRA space and interpolate static/time-aware generator losses."""
+class StateAwareRelationAlignment(nn.Module):
+    """Calibrate RSC projectors and evaluate SDGA/GSR or legacy relation losses."""
 
     def __init__(
         self,
@@ -63,6 +63,10 @@ class TimeAwareVSRA(nn.Module):
         objective: str = "legacy",
         generator_class_weight: float | None = None,
         generator_instance_weight: float | None = None,
+        gsr_mode: str = "fixed",
+        gsr_class_power: float = 0.5,
+        gsr_instance_power: float = 0.5,
+        gsr_floor: float = 0.5,
     ) -> None:
         super().__init__()
         self.n_timesteps = n_timesteps
@@ -105,6 +109,13 @@ class TimeAwareVSRA(nn.Module):
                 "diffusion_reliability requires the ZeroDiff signal schedule."
             )
         self.register_buffer("signal_retention", retention)
+        if gsr_mode != "fixed" and objective != "sdga":
+            raise ValueError("GSR state reweighting requires SDGA.")
+        self.gsr_mode = gsr_mode
+        self.gsr_class_power = gsr_class_power
+        self.gsr_instance_power = gsr_instance_power
+        self.gsr_floor = gsr_floor
+        self.gsr_profile()  # Validate before training; weights add no checkpoint buffers.
         if topology_norm not in {"global", "timestep"}:
             raise ValueError("topology_norm must be 'global' or 'timestep'.")
         self.topology_norm = topology_norm
@@ -112,6 +123,12 @@ class TimeAwareVSRA(nn.Module):
         self.contrastive_projector = RelationProjector(
             contrastive_dim,
             projection_dim,
+        )
+
+    def gsr_profile(self) -> Dict[str, torch.Tensor]:
+        return state_reweighting_schedule(
+            self.n_timesteps, self.signal_retention, self.gsr_mode,
+            self.gsr_class_power, self.gsr_instance_power, self.gsr_floor,
         )
 
     def _align(
@@ -133,7 +150,7 @@ class TimeAwareVSRA(nn.Module):
         semantic_attributes: torch.Tensor,
         real_contrastive: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
-        """Reproduce original VSRA real-space calibration."""
+        """Calibrate the RSC relation space with the inherited real-data objective."""
         visual_embedding = self.visual_projector(real_visual.detach())
         contrastive_embedding = self.contrastive_projector(real_contrastive.detach())
         semantic = self._align(visual_embedding, semantic_attributes)
@@ -182,21 +199,40 @@ class TimeAwareVSRA(nn.Module):
         zero = generated_embedding.sum() * 0.0
         if self.objective == "sdga":
             groups = timestep if relation_group_ids is None else relation_group_ids
+            if self.gsr_mode != "fixed" and not torch.equal(groups, timestep):
+                raise ValueError("Non-fixed GSR requires matched generation states.")
             blocks = sdga_pair_losses(
                 generated_embedding, semantic_attributes, contrastive_teacher,
                 labels, groups, self.n_timesteps, topology_norm=self.topology_norm,
             )
+            profile = self.gsr_profile()
+            weighted = {}
+            for name, coefficient in (("class", self.generator_class_weight),
+                                      ("instance", self.generator_instance_weight)):
+                weights = profile[name + "_weight"]
+                losses = blocks[name + "_loss_per_block"]
+                valid = blocks[name + "_valid"]
+                weighted[name] = reduce_valid_blocks(losses, valid, weights)
+                blocks[name + "_raw_weight"] = profile[name + "_raw_weight"]
+                blocks[name + "_state_weight"] = weights
+                blocks[name + "_weighted_loss_per_block"] = losses * weights
+                # These sum to this granularity's contribution to total (before gamma_rel).
+                blocks[name + "_contribution_per_block"] = (
+                    self.distance_ratio * coefficient * losses * weights * valid
+                    / valid.sum().clamp_min(1)
+                )
             total = self.distance_ratio * (
-                self.generator_class_weight * blocks["class"]
-                + self.generator_instance_weight * blocks["instance"]
+                self.generator_class_weight * weighted["class"]
+                + self.generator_instance_weight * weighted["instance"]
             )
             return {
                 "semantic": zero, "contrastive": zero, "distance": zero,
                 "angle": zero, "legacy_total": zero,
-                "pair_class": blocks["class"], "pair_instance": blocks["instance"],
+                "pair_class": weighted["class"], "pair_instance": weighted["instance"],
                 "pair_total": total, "total": total,
                 "class_pairs": blocks["class_pairs"], "instance_pairs": blocks["instance_pairs"],
-                "class_weight": zero.detach() + 1, "instance_weight": zero.detach() + 1,
+                "class_weight": reduce_valid_blocks(profile["class_weight"], blocks["class_valid"]),
+                "instance_weight": reduce_valid_blocks(profile["instance_weight"], blocks["instance_valid"]),
                 "blocks": blocks,
             }
         if relation_group_ids is not None and not torch.equal(relation_group_ids, timestep):
@@ -296,6 +332,9 @@ class TimeAwareVSRA(nn.Module):
             ),
             reliability_floor=self.reliability_floor,
         )
+        if self.objective == "sdga":
+            profile = self.gsr_profile()
+            class_weights, instance_weights = profile["class_weight"], profile["instance_weight"]
         retention = (
             self.signal_retention
             if self.signal_retention.numel()

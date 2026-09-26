@@ -1,4 +1,4 @@
-"""Vectorized relation objectives for terminal time-aware VSRA."""
+"""Distance/angle relation losses and state-block aggregation for ZeroDiff."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ def pairwise_distances(
     features: torch.Tensor,
     eps: float = 1e-12,
 ) -> torch.Tensor:
-    """Compute the original VSRA pairwise Euclidean distance matrix."""
+    """Compute the pairwise Euclidean distance matrix used by relation losses."""
     feature_square = features.pow(2).sum(dim=1)
     product = features @ features.t()
     distances = (
@@ -32,7 +32,7 @@ def normalized_relation_matrix(
     features: torch.Tensor,
     eps: float = 1e-12,
 ) -> torch.Tensor:
-    """Normalize VSRA distances by their positive mean."""
+    """Normalize relation distances by their positive mean."""
     relation = pairwise_distances(features, eps=eps)
     positive = relation[relation > 0]
     scale = positive.mean() if positive.numel() > 0 else relation.new_tensor(1.0)
@@ -44,7 +44,7 @@ def _normalize_relation_on_mask(
     mask: torch.Tensor,
     eps: float = 1e-12,
 ) -> torch.Tensor:
-    """Normalize a relation matrix only within the selected topology."""
+    """Normalize a relation matrix only over the selected relation pairs."""
     selected = relation.masked_select(mask)
     positive = selected[selected > 0]
     scale = positive.mean() if positive.numel() > 0 else relation.new_tensor(1.0)
@@ -57,7 +57,7 @@ def _normalize_relation_by_timestep(
     timesteps: torch.Tensor,
     eps: float = 1e-12,
 ) -> torch.Tensor:
-    """Normalize each same-timestep topology block independently."""
+    """Normalize each same-state relation block independently."""
     normalized = torch.zeros_like(relation)
     for timestep in torch.unique(timesteps):
         members = timesteps.eq(timestep)
@@ -75,7 +75,7 @@ def rkd_distance_loss(
     student_features: torch.Tensor,
     teacher_features: torch.Tensor,
 ) -> torch.Tensor:
-    """Original scale-invariant VSRA distance loss over the whole batch."""
+    """Scale-invariant RKD distance loss over the whole batch."""
     student_relation = normalized_relation_matrix(student_features)
     with torch.no_grad():
         teacher_relation = normalized_relation_matrix(teacher_features.detach())
@@ -88,7 +88,7 @@ def rkd_angle_loss(
     eps: float = 1e-12,
     max_samples: int = 128,
 ) -> torch.Tensor:
-    """Original VSRA angle loss over ordered point triples."""
+    """RKD angle loss over ordered point triples."""
     n_sample = student_features.shape[0]
     if max_samples > 0 and n_sample > max_samples:
         indices = torch.randperm(n_sample, device=student_features.device)[:max_samples]
@@ -119,7 +119,7 @@ def relation_alignment_components(
     angle_ratio: float = 0.0,
     angle_max_samples: int = 128,
 ) -> Dict[str, torch.Tensor]:
-    """Return the distance, angle, and combined original VSRA losses."""
+    """Return distance, angle, and combined relation losses."""
     distance = distance_ratio * rkd_distance_loss(student_features, teacher_features)
     angle = student_features.sum() * 0.0
     if angle_ratio > 0:
@@ -160,7 +160,7 @@ def time_aware_pair_losses(
     instance_sample_weights: torch.Tensor,
     topology_norm: str = "global",
 ) -> Dict[str, torch.Tensor]:
-    """Align disjoint topologies only for pairs at the same diffusion time."""
+    """Legacy pair reduction for disjoint relations at the same diffusion state."""
     if topology_norm not in {"global", "timestep"}:
         raise ValueError("topology_norm must be 'global' or 'timestep'.")
     same_class = labels[:, None].eq(labels[None, :])
@@ -221,8 +221,17 @@ def time_aware_pair_losses(
     }
 
 
-def reduce_valid_blocks(losses: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
-    """Give every nonempty relation block equal weight (empty -> graph-safe 0)."""
+def reduce_valid_blocks(losses: torch.Tensor, valid: torch.Tensor,
+                        state_weights: torch.Tensor | None = None) -> torch.Tensor:
+    """Average valid blocks, optionally with full-schedule-normalized weights.
+
+    The denominator counts valid states, never their weight mass or pair counts.
+    Missing blocks must not renormalize the schedule; empty -> graph-safe zero.
+    """
+    if state_weights is not None:
+        if state_weights.shape != losses.shape:
+            raise ValueError("State weights must match the block loss shape.")
+        losses = losses * state_weights.detach().to(losses)
     return (losses * valid.to(losses.dtype)).sum() / valid.sum().clamp_min(1)
 
 
@@ -235,7 +244,7 @@ def sdga_pair_losses(
     n_groups: int,
     topology_norm: str = "timestep",
 ) -> Dict[str, torch.Tensor]:
-    """Dual topology alignment, reduced equally over nonempty relation groups.
+    """Dual-granularity alignment, averaged over nonempty relation groups.
 
     Groups normally equal the *actual* generator timestep. The mixed control
     supplies a separate grouping without changing the generator input. Counts

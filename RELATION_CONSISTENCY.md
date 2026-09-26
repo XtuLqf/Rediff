@@ -1,9 +1,10 @@
-# DS-ReG / Time-aware relation consistency for ZeroDiff
+# DS-ReG / State-aware dual-granularity relational alignment for ZeroDiff
 
 On `codex/ds-reg`, v1.02 implements module two, State-Matched Dual-Granularity
 Alignment (SDGA), alongside the inherited `legacy` objective. The remaining
 research targets and contribution statements are in [DS_REG_DESIGN.md](DS_REG_DESIGN.md).
-Classification improvements and new calibration/reweighting designs remain unverified.
+SDGA now also supports opt-in GSR state reweighting. Classification improvements
+and the proposed new calibration design remain unverified.
 
 Calibration and D updates retain their ordinary real minibatches. An optional
 P×K minibatch supplies all terms in a single G update. The relation projectors
@@ -12,11 +13,31 @@ are calibrated before this minibatch is selected, then frozen during G's update.
 For environment setup and copyable experiment commands, see
 [SERVER_RUNBOOK.md](SERVER_RUNBOOK.md). This document covers method details only.
 
+## Code organization
+
+- [relation/losses.py](relation/losses.py): distance/angle relation losses and
+  state-block aggregation.
+- [relation/alignment.py](relation/alignment.py): `StateAwareRelationAlignment`
+  coordinates RSC calibration, SDGA alignment, GSR weighting and legacy objectives.
+- [relation/timestep_schedule.py](relation/timestep_schedule.py): state assignment
+  and weight schedules.
+- [tests/test_relation_training.py](tests/test_relation_training.py): relation
+  training, sampling, launchers and checkpoint recovery tests.
+
+Use the modules and class above; old module paths and class aliases have been
+removed. Old DFG configurations are not automatically upgraded for resume.
+Start a fresh DFG run with the existing DRG checkpoint. New runs can resume
+their own full training checkpoints when configurations match exactly.
+DRG filename lookup and weight loading are unchanged. Existing CLI flags,
+checkpoint field names and internal attributes remain as-is; retaining a field
+name requires no compatibility layer. Loss formulas, splits, evaluation and
+diagnostics are unchanged.
+
 ## Implemented SDGA objective (v1.02)
 
 Select `--rel_objective sdga --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0`.
-Incompatible settings fail early. Module three's reliability weighting is not
-applied to this objective.
+Incompatible settings fail early. These legacy time options remain fixed;
+module three is controlled separately by `rel_gsr_*`, defaulting to fixed weights.
 
 For each relation group `b`, compare different-class pairs against semantic
 attributes and same-class, distinct-instance pairs against projected PaCo
@@ -44,6 +65,46 @@ block is the actual generation timestep `t`, whose noisy input has signal
 The inherited fixed objective averages over pairs. SDGA averages over valid
 states. With equal per-state pair counts they are mathematically equal; a
 refactor alone is not evidence of a new performance gain.
+
+### GSR state reweighting
+
+`rel_gsr_mode` selects `fixed`, `shared`, or `granularity`. Shared requires equal
+`rel_gsr_class_power` and `rel_gsr_instance_power` (both default to 0.5).
+Granularity permits different powers, including swapping their assignment.
+`rel_gsr_floor` defaults to 0.5 and bounds raw weights only.
+
+```text
+s(t) = alpha_bar[t+1]
+a_k(t) = floor + (1 - floor) * s(t)^power_k
+w_k(t) = a_k(t) / mean_over_complete_schedule(a_k)
+L_k = sum_t(valid_k(t) * w_k(t) * L_k(t)) / max(1, sum_t(valid_k(t)))
+L_GSR = rel_dist_ratio * (lambda_C * L_C + lambda_I * L_I)
+L_G = L_ZeroDiff + gamma_rel * L_GSR
+```
+
+Fixed mode uses weights of one; zero powers or floor=1 also recover the fixed
+objective. The powers are an experimental design inherited from the older
+weight function, not proven relation reliability. The schedule mean is one,
+but neither actual losses nor gradient norms are constrained to match.
+Missing states are excluded independently for each granularity; their absence
+does not renormalize the full schedule. A single valid state's coefficient thus
+does not cancel. An all-zero raw schedule is rejected; use a positive floor.
+
+Non-fixed GSR requires SDGA, matched grouping, gamma_rel>0 and an isolated
+`--run_dir`. A mixed relation block has no single actual diffusion state.
+Use PK plus class_group for complete coverage. Keep gamma_rel and calibration
+coefficients fixed when tuning G-only lambda coefficients.
+
+Block logs retain unweighted losses and add `*_raw_weight`, `*_state_weight`,
+`*_weighted_loss_per_block`, and `*_contribution_per_block`. Contributions
+include lambda and rel_dist_ratio and sum to the optimized relation loss before
+gamma_rel. Epoch logs average these per-update contributions. Scalar weight logs
+average over valid states; with complete coverage they equal one, so inspect
+the arrays to see the allocation. Checkpoint/config records include GSR settings;
+missing or changed configuration fields prevent resume without migration.
+
+Dataset splits, classifier/model selection and motivation diagnostics are
+unchanged. Fixed/shared/granularity classification ablations assess module three.
 
 ### Sampling and controlled ablations
 
@@ -74,15 +135,15 @@ refactor alone is not evidence of a new performance gain.
 
 Private batch, timestep and grouping RNG streams prevent mixed grouping from
 shifting subsequent sampling/noise draws. Full checkpoints save these streams
-and validate relation plus training settings. Old checkpoints acquire only
-legacy defaults and cannot silently resume as SDGA.
+and validate relation plus training settings exactly. Incomplete old DFG
+configurations are rejected rather than assigned defaults.
 
 ### Outputs and limits
 
-New sampling/objective/coefficient configurations require `--run_dir` to avoid
-overwriting experiments. The AWA2 launcher supplies it automatically for
-`--experiment S0`, `S1`, or `S2`, adding a numbered suffix on a fresh rerun.
-An explicit resume uses the checkpoint directory. CUDA is checked before any
+Non-fixed GSR requires `--run_dir` to avoid overwriting experiments. Existing
+fixed SDGA commands may retain their flat output layout. S0/S1/S2 are command
+labels in the runbook, not launcher options. An explicit resume through a
+launcher uses the isolated checkpoint directory. CUDA is checked before any
 run outputs are created. The directory contains `config.json` (including seed,
 DRG path and SHA-256), `train.log`, short best-model filenames and
 `dfg_training_last.tar`. Existing nonempty directories require explicit resume.
@@ -94,7 +155,7 @@ and averaged over G updates in each epoch; an empty block contributes zero to
 its logged per-block loss, with the validity frequency identifying missing
 coverage. The optimized loss averages only valid blocks on each update.
 
-RSC calibration math, GSR weighting math, the clean baseline diagnostic and
+RSC calibration math, legacy weighting, the clean baseline diagnostic and
 classification/model-selection protocol are unchanged. SDGA models must not be
 sent to `diagnostics.run_baseline`; a common method-diagnostic entrypoint is
 still future work. The following sections describe the inherited legacy path.

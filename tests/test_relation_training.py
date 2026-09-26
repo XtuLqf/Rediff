@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from datasets.image_util import DATA_LOADER
-from relation.topology import sdga_pair_losses
+from relation.losses import sdga_pair_losses
 from relation.timestep_schedule import mixed_relation_groups
 
 from diagnostics.relation_metrics import class_relation_loss, instance_relation_loss
@@ -22,8 +22,8 @@ from relation.timestep_schedule import (
     sample_relation_group_timesteps,
     sample_relation_weights,
 )
-from relation.topology import time_aware_pair_losses
-from relation.vsra import TimeAwareVSRA
+from relation.losses import time_aware_pair_losses
+from relation.alignment import StateAwareRelationAlignment
 
 
 def test_grouped_timesteps_keep_classes_together_and_balance_loads():
@@ -169,7 +169,7 @@ def test_static_and_time_aware_losses_use_a_convex_budget():
     labels = torch.tensor([0, 0, 1, 1, 2, 2])
     timesteps = torch.zeros(6, dtype=torch.long)
 
-    static = TimeAwareVSRA(
+    static = StateAwareRelationAlignment(
         n_timesteps=4,
         visual_dim=4,
         contrastive_dim=4,
@@ -181,7 +181,7 @@ def test_static_and_time_aware_losses_use_a_convex_budget():
     assert torch.allclose(static_losses["total"], static_losses["legacy_total"])
     assert static_losses["pair_total"].item() == 0.0
 
-    mixed = TimeAwareVSRA(
+    mixed = StateAwareRelationAlignment(
         n_timesteps=4,
         visual_dim=4,
         contrastive_dim=4,
@@ -193,7 +193,7 @@ def test_static_and_time_aware_losses_use_a_convex_budget():
     expected = 0.75 * mixed_losses["legacy_total"] + 0.25 * mixed_losses["pair_total"]
     assert torch.allclose(mixed_losses["total"], expected)
 
-    time_only = TimeAwareVSRA(
+    time_only = StateAwareRelationAlignment(
         n_timesteps=4,
         visual_dim=4,
         contrastive_dim=4,
@@ -268,8 +268,8 @@ def test_generator_coefficients_preserve_calibration_and_frozen_projector_gradie
     torch.manual_seed(43)
     common = dict(n_timesteps=2, visual_dim=4, contrastive_dim=4, projection_dim=3,
                   objective=objective, time_pair_weight=eta, time_mode='fixed', time_strength=0)
-    enabled = TimeAwareVSRA(**common)
-    disabled = TimeAwareVSRA(**common, generator_class_weight=0, generator_instance_weight=0)
+    enabled = StateAwareRelationAlignment(**common)
+    disabled = StateAwareRelationAlignment(**common, generator_class_weight=0, generator_instance_weight=0)
     disabled.load_state_dict(enabled.state_dict())
     x = torch.randn(12, 4, requires_grad=True)
     semantic, con = torch.randn(12, 3), torch.randn(12, 4, requires_grad=True)
@@ -373,7 +373,8 @@ def documented_sdga_arguments(dataset, experiment):
     prefix = f'python scripts/run_{dataset}_zerodiff_DFG_train.py '
     commands = [line for line in runbook.read_text(encoding='utf-8').splitlines()
                 if line.startswith(prefix) and '--rel_objective sdga' in line]
-    assert len(commands) == 3
+    # The first three commands are S0/S1/S2; later sections add weight searches.
+    assert len(commands) >= 3
     return shlex.split(commands[int(experiment[1])])[2:]
 
 
@@ -446,25 +447,31 @@ def training_namespace(options):
     definitions = ast.Module(body=[node for node in tree.body
                                   if isinstance(node, (ast.FunctionDef, ast.ClassDef))], type_ignores=[])
     scope = dict(torch=torch, optim=torch.optim, np=np, random=random, os=os, json=json,
-                 opt=options, zerodiff_tools=zerodiff_tools, TimeAwareVSRA=TimeAwareVSRA,
+                 opt=options, zerodiff_tools=zerodiff_tools, StateAwareRelationAlignment=StateAwareRelationAlignment,
                  sample_relation_group_timesteps=sample_relation_group_timesteps,
                  mixed_relation_groups=mixed_relation_groups, logger=io.StringIO(),
                  new_relation_behavior=True, BEST_STATE_NAMES=(),
-                 relation_run_config={'objective': 'sdga'}, training_run_config={'seed': 103})
+                 training_run_config={'seed': 103})
     exec(compile(definitions, str(path), 'exec'), scope)
-    scope['relation_run_config'] = scope['normalized_relation_config'](scope['relation_run_config'])
+    config_node = next(node for node in tree.body if isinstance(node, ast.Assign)
+                       and any(isinstance(t, ast.Name) and t.id == 'relation_run_config'
+                               for t in node.targets))
+    exec(compile(ast.Module(body=[config_node], type_ignores=[]), str(path), 'exec'), scope)
     return scope
 
 
-@pytest.mark.parametrize('grouping', ['matched', 'mixed'])
-def test_real_training_step_and_full_resume_are_identical(monkeypatch, tmp_path, grouping):
+@pytest.mark.parametrize('grouping,gsr', [('matched', 'fixed'), ('mixed', 'fixed'),
+                                       ('matched', 'shared'), ('matched', 'granularity')])
+def test_real_training_step_and_full_resume_are_identical(monkeypatch, tmp_path, grouping, gsr):
     options = parse_options(monkeypatch, '--dataset', 'AWA2', '--gamma_rel', '1',
                             '--rel_objective', 'sdga', '--rel_time_mode', 'fixed', '--rel_time_strength', '0',
                             '--g_batch_mode', 'pk', '--g_timestep_policy', 'class_group',
                             '--rel_pair_grouping', grouping, '--manualSeed', '103',
                             '--resSize', '8', '--attSize', '4', '--noiseSize', '4', '--dim_t', '4',
                             '--ndh', '16', '--encoder_layer_sizes', '8', '16',
-                            '--decoder_layer_sizes', '16', '8', '--rel_proj_dim', '8')
+                            '--decoder_layer_sizes', '16', '8', '--rel_proj_dim', '8',
+                            '--rel_gsr_mode', gsr, '--run_dir', str(tmp_path / 'run'),
+                            '--rel_gsr_class_power', '0.25' if gsr == 'granularity' else '0.5')
     options.cuda = False
     options.critic_iter = 1
     torch.manual_seed(103)
@@ -508,17 +515,24 @@ def test_real_training_step_and_full_resume_are_identical(monkeypatch, tmp_path,
         assert torch.equal(expected, resumed.detach())
     for key, expected in expected_weights.items():
         assert torch.equal(expected, restored.state_dict()[key]), key
+    scope['relation_run_config']['gsr_floor'] = 0.25
+    with pytest.raises(ValueError, match='relation configuration'):
+        scope['load_training_state'](restored, checkpoint)
+    scope['relation_run_config']['gsr_floor'] = 0.5
     scope['training_run_config']['seed'] = 999
     with pytest.raises(ValueError, match='training configuration differs'):
         scope['load_training_state'](restored, checkpoint)
-
-
-def test_old_checkpoint_defaults_do_not_adopt_sdga_settings(monkeypatch):
-    scope = training_namespace(parse_options(monkeypatch))
-    normalized = scope['normalized_relation_config']({'class_weight': 2, 'instance_weight': 3})
-    assert normalized['objective'] == 'legacy'
-    assert normalized['generator_class_weight'] == 2 and normalized['generator_instance_weight'] == 3
-    assert normalized['g_timestep_policy'] == 'auto' and normalized['g_batch_mode'] == 'random'
+    scope['training_run_config']['seed'] = 103
+    old = torch.load(checkpoint, weights_only=False)
+    del old['relation_config']['gsr_mode']
+    torch.save(old, checkpoint)
+    with pytest.raises(ValueError, match='Old DFG configurations are not migrated'):
+        scope['load_training_state'](restored, checkpoint)
+    old['relation_config'] = dict(scope['relation_run_config'])
+    del old['training_config']
+    torch.save(old, checkpoint)
+    with pytest.raises(ValueError, match='missing training configuration'):
+        scope['load_training_state'](restored, checkpoint)
 
 
 def trainer_startup_code():

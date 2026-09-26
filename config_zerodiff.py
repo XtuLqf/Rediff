@@ -53,8 +53,14 @@ parser.add_argument("--temp_con", type=float, default=0.07)
 parser.add_argument("--gamma_CON_sample", type=float, default=0.0)
 parser.add_argument("--gamma_CON_step", type=float, default=0.0)
 parser.add_argument("--factor_dist", type=float, default=1.0)
-### time-aware VSRA (disabled by default)
+### state-aware relation alignment (disabled by default)
 parser.add_argument('--rel_objective', choices=['legacy', 'sdga'], default='legacy')
+parser.add_argument('--rel_gsr_mode', choices=['fixed', 'shared', 'granularity'], default='fixed',
+                    help='SDGA state allocation; shared requires equal powers')
+parser.add_argument('--rel_gsr_class_power', type=float, default=0.5)
+parser.add_argument('--rel_gsr_instance_power', type=float, default=0.5)
+parser.add_argument('--rel_gsr_floor', type=float, default=0.5,
+                    help='raw weight floor before full-schedule mean normalization')
 parser.add_argument('--rel_generator_class_weight', type=float, default=None,
                     help='G-only class coefficient; omitted inherits rel_class_weight')
 parser.add_argument('--rel_generator_instance_weight', type=float, default=None,
@@ -67,28 +73,28 @@ parser.add_argument('--g_timestep_policy', choices=['auto', 'independent', 'clas
 parser.add_argument('--rel_pair_grouping', choices=['matched', 'mixed'], default='matched',
                     help='mixed regroups whole classes without changing generator timesteps')
 parser.add_argument("--gamma_rel", type=float, default=0.0,
-                    help="overall time-aware VSRA weight; 0 preserves the baseline")
+                    help="calibration and generator relation weight; 0 preserves the baseline")
 parser.add_argument("--rel_class_weight", type=float, default=1.0,
-                    help="semantic-teacher weight in terminal VSRA")
+                    help="RSC semantic coefficient; inherited by G unless overridden")
 parser.add_argument("--rel_instance_weight", type=float, default=1.0,
-                    help="contrastive-teacher weight in terminal VSRA")
+                    help="RSC contrastive coefficient; inherited by G unless overridden")
 parser.add_argument("--rel_proj_dim", type=int, default=512,
-                    help="dimension of the calibrated VSRA relation space")
+                    help="dimension of the calibrated relation space")
 parser.add_argument("--rel_teacher_anchor_weight", type=float, default=1.0,
-                    help="weight for preserving semantic and PaCo teacher topology")
+                    help="RSC coefficient anchoring projected PaCo relations to semantics")
 parser.add_argument("--rel_dist_ratio", type=float, default=1.0)
 parser.add_argument("--rel_angle_ratio", type=float, default=2.0)
 parser.add_argument("--rel_angle_max_samples", type=int, default=128)
 parser.add_argument("--rel_use_angle", action="store_true", default=False)
 parser.add_argument("--rel_time_pair_weight", type=float, default=1.0,
-                    help="convex mix from static VSRA (0) to time-aware dual topology (1)")
+                    help="legacy static/pair loss mix; SDGA requires 1")
 parser.add_argument("--rel_time_mode", default="diffusion_reliability",
                     choices=["fixed", "class_up_instance_down", "diffusion_reliability"],
                     help="relation coordination: fixed, legacy linear, or diffusion-state reliability")
 parser.add_argument("--rel_time_strength", type=float, default=0.5,
-                    help="diffusion sensitivity; 0 exactly recovers fixed topology weighting")
+                    help="legacy diffusion sensitivity; SDGA requires 0 and uses rel_gsr_*")
 parser.add_argument("--rel_reliability_floor", type=float, default=0.5,
-                    help="minimum trust retained for either topology at low SNR")
+                    help="legacy raw relation weight floor; SDGA uses rel_gsr_floor")
 parser.add_argument("--rel_topology_norm", default="timestep",
                     choices=["global", "timestep"],
                     help="normalize relation distances globally or within each timestep")
@@ -159,4 +165,18 @@ if opt.rel_pair_grouping == 'mixed':
     if (opt.rel_objective != 'sdga' or opt.g_batch_mode != 'pk'
             or opt.g_timestep_policy != 'class_group' or opt.n_T < 2):
         parser.error('mixed requires SDGA, PK, explicit class_group and n_T >= 2')
+
+for name in ('rel_gsr_class_power', 'rel_gsr_instance_power'):
+    value = getattr(opt, name)
+    if not math.isfinite(value) or value < 0:
+        parser.error(name + ' must be finite and non-negative')
+if not math.isfinite(opt.rel_gsr_floor) or not 0 <= opt.rel_gsr_floor <= 1:
+    parser.error('rel_gsr_floor must be finite and in [0, 1]')
+if opt.rel_gsr_mode == 'shared' and opt.rel_gsr_class_power != opt.rel_gsr_instance_power:
+    parser.error('shared GSR requires equal class and instance powers')
+if opt.rel_gsr_mode != 'fixed':
+    if opt.rel_objective != 'sdga' or opt.rel_pair_grouping != 'matched' or opt.gamma_rel <= 0:
+        parser.error('non-fixed GSR requires SDGA, matched grouping and gamma_rel > 0')
+    if not opt.run_dir:
+        parser.error('non-fixed GSR requires --run_dir to preserve each experiment')
 

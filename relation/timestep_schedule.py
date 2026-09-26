@@ -3,8 +3,54 @@
 from __future__ import annotations
 
 from typing import Tuple
+import math
 
 import torch
+
+
+def state_reweighting_schedule(
+    n_timesteps: int,
+    signal_retention: torch.Tensor | None = None,
+    mode: str = "fixed",
+    class_power: float = 0.5,
+    instance_power: float = 0.5,
+    floor: float = 0.5,
+) -> dict[str, torch.Tensor]:
+    """GSR weights normalized over the complete diffusion schedule, not a batch.
+
+    Powers are a candidate state allocation, not an estimated reliability.
+    Shared mode requires equal powers; fixed mode is the original SDGA anchor.
+    No learnable parameters or random draws are introduced.
+    """
+    if n_timesteps < 1 or mode not in {"fixed", "shared", "granularity"}:
+        raise ValueError("GSR requires positive n_timesteps and a valid mode.")
+    if any(not math.isfinite(p) or p < 0 for p in (class_power, instance_power)):
+        raise ValueError("GSR powers must be finite and non-negative.")
+    if not math.isfinite(floor) or not 0 <= floor <= 1:
+        raise ValueError("GSR floor must be finite and in [0, 1].")
+    if mode == "shared" and class_power != instance_power:
+        raise ValueError("Shared GSR requires equal class and instance powers.")
+    if mode != "fixed" and (signal_retention is None or signal_retention.numel() == 0):
+        raise ValueError("GSR requires the complete signal retention schedule.")
+    if signal_retention is not None and signal_retention.numel():
+        if signal_retention.ndim != 1 or signal_retention.numel() != n_timesteps:
+            raise ValueError("GSR signal retention must contain one value per state.")
+        if (not torch.isfinite(signal_retention).all()
+                or ((signal_retention < 0) | (signal_retention > 1)).any()):
+            raise ValueError("GSR signal retention must be finite and in [0, 1].")
+    device = signal_retention.device if signal_retention is not None else None
+    result = {}
+    for name, power in (("class", class_power), ("instance", instance_power)):
+        if mode == "fixed":
+            raw = torch.ones(n_timesteps, device=device, dtype=torch.float64)
+        else:
+            raw = floor + (1 - floor) * signal_retention.detach().double().pow(power)
+        mean = raw.mean()
+        if not torch.isfinite(mean) or mean <= 0:
+            raise ValueError("GSR weights have zero total mass; use a positive floor.")
+        result[name + "_raw_weight"] = raw.float()
+        result[name + "_weight"] = (raw / mean).float()
+    return result
 
 
 def sample_relation_group_timesteps(

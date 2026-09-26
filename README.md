@@ -60,17 +60,17 @@ Firstly, download these datasets as well as the xlsa17 and our data splitting an
 ## Training
 
 The isolated baseline diagnostics are documented in `diagnostics/README.md`.
-The time-aware multi-granularity relation method and its class/instance ablation
+The state-aware dual-granularity relation method and its class/instance ablation
 order are documented in `RELATION_CONSISTENCY.md`. End-to-end commands for the
 Python 3.10 / PyTorch 2.9.1+cu130 Linux server are in `SERVER_RUNBOOK.md`.
 
-To train and evaluate ZSL and GZSL models, please run the file `./scripts/train_awa2_zerodiff_DRG.py` then the scripts `./scripts/train_awa2_zerodiff_DFG`, e.g.:
+To train and evaluate ZSL and GZSL models, please run the file `./scripts/run_awa2_zerodiff_DRG_train.py` then the scripts `./scripts/run_awa2_zerodiff_DFG_train.py`, e.g.:
 ```
-python ./scripts/train_awa2_zerodiff_DRG.py
+python ./scripts/run_awa2_zerodiff_DRG_train.py
 ```
 Then
 ```
-python ./scripts/train_awa2_zerodiff_DFG.py
+python ./scripts/run_awa2_zerodiff_DFG_train.py
 ```
 
 ## Results
