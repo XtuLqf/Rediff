@@ -177,6 +177,4 @@ if opt.rel_gsr_mode == 'shared' and opt.rel_gsr_class_power != opt.rel_gsr_insta
 if opt.rel_gsr_mode != 'fixed':
     if opt.rel_objective != 'sdga' or opt.rel_pair_grouping != 'matched' or opt.gamma_rel <= 0:
         parser.error('non-fixed GSR requires SDGA, matched grouping and gamma_rel > 0')
-    if not opt.run_dir:
-        parser.error('non-fixed GSR requires --run_dir to preserve each experiment')
 

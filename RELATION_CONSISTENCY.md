@@ -90,8 +90,8 @@ Missing states are excluded independently for each granularity; their absence
 does not renormalize the full schedule. A single valid state's coefficient thus
 does not cancel. An all-zero raw schedule is rejected; use a positive floor.
 
-Non-fixed GSR requires SDGA, matched grouping, gamma_rel>0 and an isolated
-`--run_dir`. A mixed relation block has no single actual diffusion state.
+Non-fixed GSR requires SDGA, matched grouping and gamma_rel>0.
+A mixed relation block has no single actual diffusion state.
 Use PK plus class_group for complete coverage. Keep gamma_rel and calibration
 coefficients fixed when tuning G-only lambda coefficients.
 
@@ -140,8 +140,9 @@ configurations are rejected rather than assigned defaults.
 
 ### Outputs and limits
 
-Non-fixed GSR requires `--run_dir` to avoid overwriting experiments. Existing
-fixed SDGA commands may retain their flat output layout. S0/S1/S2 are command
+All SDGA/GSR commands use the original flat out/log layout by default, with
+same-name outputs replaced on a fresh run. `--run_dir` remains optional for
+users who explicitly want isolated results. S0/S1/S2 are command
 labels in the runbook, not launcher options. An explicit resume through a
 launcher uses the isolated checkpoint directory. CUDA is checked before any
 run outputs are created. The directory contains `config.json` (including seed,

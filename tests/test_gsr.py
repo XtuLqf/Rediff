@@ -134,7 +134,6 @@ def test_sdga_integration_gradients_and_calibration(mode, powers, floor):
     ['--rel_gsr_mode', 'granularity', '--rel_pair_grouping', 'mixed',
      '--g_batch_mode', 'pk', '--g_timestep_policy', 'class_group'],
     ['--rel_gsr_mode', 'shared', '--gamma_rel', '0'],
-    ['--rel_gsr_mode', 'shared', '--run_dir', ''],
 ])
 def test_invalid_gsr_options(monkeypatch, extra):
     with pytest.raises(SystemExit):
@@ -161,5 +160,11 @@ def test_documented_gsr_commands_reach_trainer(monkeypatch, tmp_path, dataset):
         assert options.rel_gsr_mode == mode
         assert (options.rel_gsr_class_power, options.rel_gsr_instance_power) == powers
         assert options.rel_gsr_floor == .5 and options.rel_pair_grouping == 'matched'
-        assert options.rel_generator_class_weight == options.rel_generator_instance_weight == 1
-        assert options.run_dir and options.netR_model_path == str(checkpoint)
+        assert options.rel_generator_class_weight == .5
+        assert options.rel_generator_instance_weight == (.5 if dataset == 'sun' else 1)
+        assert options.rel_class_weight == options.rel_instance_weight == 1
+        assert options.run_dir is None and options.netR_model_path == str(checkpoint)
+        if mode == 'fixed':
+            assert '--rel_gsr_class_power' not in arguments
+            assert '--rel_gsr_instance_power' not in arguments
+            assert '--rel_gsr_floor' not in arguments

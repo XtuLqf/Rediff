@@ -209,99 +209,121 @@ python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga 
 
 | 实验 | rel_gsr_mode | 类别指数 | 实例指数 | 原始下限 | 验证目的 |
 | --- | --- | --- | --- | --- | --- |
-| G0 | fixed | 0.5（不使用） | 0.5（不使用） | 0.5 | 固定 SDGA 参照 |
+| G0 | fixed | 不使用 | 不使用 | 不使用 | 固定 SDGA 参照 |
 | G1 | shared | 0.5 | 0.5 | 0.5 | 共同状态调度的作用 |
 | G2 | granularity | 0.25 | 0.5 | 0.5 | 实例更快衰减的候选 |
 | G3 | granularity | 0.5 | 0.25 | 0.5 | 交换两种粒度的曲线 |
 
-先确定生成器常数系数，再比较 G0/G1/G2/G3。以下完整命令均以类别/实例系数
-`1/1` 为例；若固定强度筛查选出其他组合，应同时修改四组的
-`rel_generator_class_weight`、`rel_generator_instance_weight`，并使用新的运行目录。
+本节 G0/G1/G2/G3 使用以下生成器强度，同一数据集的四组保持一致：
+
+| 数据集 | 类别强度 λC | 实例强度 λI |
+| --- | --- | --- |
+| AWA2 | 0.5 | 1 |
+| CUB | 0.5 | 1 |
+| SUN | 0.5 | 0.5 |
+
+若后续调整强度，应同时修改该数据集四组的
+`rel_generator_class_weight`、`rel_generator_instance_weight`。
 保持 `gamma_rel=1` 和校准参数不变。不同指数与下限仅为候选，不能预先声称提高准确率。
 
-每条命令独立运行，启动器自动转发 GSR 参数，仍自动查找该数据集的 DRG；
-可追加 `--netR_model_path` 指定文件。每组使用独立 `--run_dir`，不会覆盖旧平铺日志。
-目录含 config.json、train.log、dfg_gzsl_VCS.tar 等最佳模型及 dfg_training_last.tar。
-新实验需用新目录；恢复时在原命令追加 `--resume_training <该目录>/dfg_training_last.tar`，
-所有训练与关系配置须与断点一致。旧 DFG 配置不自动补齐或迁移；使用原 DRG 文件
-从头训练 DFG 时不传 `--resume_training`，并使用新 run_dir。新训练产生的断点仍可续训。
+生成器强度与校准系数是两组参数：
+
+| 参数 | 用途 | 本节取值 |
+| --- | --- | --- |
+| `--rel_generator_class_weight` | 生成器跨类关系强度 λC | 均为 0.5 |
+| `--rel_generator_instance_weight` | 生成器类内关系强度 λI | AWA2/CUB 为 1；SUN 为 0.5 |
+| `--rel_class_weight` / `--rel_instance_weight` | 模块一校准系数；未指定生成器强度时才作为其默认值 | 1 / 1 |
+| `--rel_gsr_class_power` / `--rel_gsr_instance_power` | 状态权重曲线的指数，不是 λC / λI | 仅 G1/G2/G3 使用 |
+
+下面每条命令开头均显式给出两项生成器强度。G0 只指定 `--rel_gsr_mode fixed`，
+不列出该模式下不参与计算的指数和下限。
+
+每条命令独立运行，仍自动查找该数据集现有的 DRG；可追加 `--netR_model_path` 指定文件。
+沿用原来的保存方式：模型写入 `out/<DATASET>/`，日志写入 `log/<DATASET>/`，
+继续使用原长文件名，不创建 G0/G1 等子目录。本节不传 `--run_dir`，也不强制该参数。
+不同组仍会覆盖同名 DFG 模型和日志；每组结束后先记录或备份需要保留的结果，再运行下一组。
+DRG 文件及其加载路径不变。
+
+从头训练 DFG 不传 `--resume_training`。若续训本次新训练产生的断点，在原命令追加
+`--resume_training 'out/<DATASET>/<实际长文件名>_training_last.tar'`，保持训练与关系配置一致。
+旧 DFG 配置不自动补齐或迁移。
 
 ### AWA2 GSR 独立命令
 
-**AWA2-G0**
+**AWA2-G0：类别强度 0.5，实例强度 1**
 
 ```bash
-python scripts/run_awa2_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 9182 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 5400 --rel_gsr_mode fixed --rel_gsr_class_power 0.5 --rel_gsr_instance_power 0.5 --rel_gsr_floor 0.5 --run_dir out/AWA2/gsr_G0_seed_9182
+python scripts/run_awa2_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0.5 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 9182 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 5400 --rel_gsr_mode fixed
 ```
 
-**AWA2-G1**
+**AWA2-G1：类别强度 0.5，实例强度 1**
 
 ```bash
-python scripts/run_awa2_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 9182 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 5400 --rel_gsr_mode shared --rel_gsr_class_power 0.5 --rel_gsr_instance_power 0.5 --rel_gsr_floor 0.5 --run_dir out/AWA2/gsr_G1_seed_9182
+python scripts/run_awa2_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0.5 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 9182 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 5400 --rel_gsr_mode shared --rel_gsr_class_power 0.5 --rel_gsr_instance_power 0.5 --rel_gsr_floor 0.5
 ```
 
-**AWA2-G2**
+**AWA2-G2：类别强度 0.5，实例强度 1**
 
 ```bash
-python scripts/run_awa2_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 9182 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 5400 --rel_gsr_mode granularity --rel_gsr_class_power 0.25 --rel_gsr_instance_power 0.5 --rel_gsr_floor 0.5 --run_dir out/AWA2/gsr_G2_seed_9182
+python scripts/run_awa2_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0.5 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 9182 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 5400 --rel_gsr_mode granularity --rel_gsr_class_power 0.25 --rel_gsr_instance_power 0.5 --rel_gsr_floor 0.5
 ```
 
-**AWA2-G3**
+**AWA2-G3：类别强度 0.5，实例强度 1**
 
 ```bash
-python scripts/run_awa2_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 9182 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 5400 --rel_gsr_mode granularity --rel_gsr_class_power 0.5 --rel_gsr_instance_power 0.25 --rel_gsr_floor 0.5 --run_dir out/AWA2/gsr_G3_seed_9182
+python scripts/run_awa2_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0.5 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 9182 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 5400 --rel_gsr_mode granularity --rel_gsr_class_power 0.5 --rel_gsr_instance_power 0.25 --rel_gsr_floor 0.5
 ```
 
 ### CUB GSR 独立命令
 
-**CUB-G0**
+**CUB-G0：类别强度 0.5，实例强度 1**
 
 ```bash
-python scripts/run_cub_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 3483 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 1440 --rel_gsr_mode fixed --rel_gsr_class_power 0.5 --rel_gsr_instance_power 0.5 --rel_gsr_floor 0.5 --run_dir out/CUB/gsr_G0_seed_3483
+python scripts/run_cub_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0.5 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 3483 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 1440 --rel_gsr_mode fixed
 ```
 
-**CUB-G1**
+**CUB-G1：类别强度 0.5，实例强度 1**
 
 ```bash
-python scripts/run_cub_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 3483 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 1440 --rel_gsr_mode shared --rel_gsr_class_power 0.5 --rel_gsr_instance_power 0.5 --rel_gsr_floor 0.5 --run_dir out/CUB/gsr_G1_seed_3483
+python scripts/run_cub_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0.5 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 3483 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 1440 --rel_gsr_mode shared --rel_gsr_class_power 0.5 --rel_gsr_instance_power 0.5 --rel_gsr_floor 0.5
 ```
 
-**CUB-G2**
+**CUB-G2：类别强度 0.5，实例强度 1**
 
 ```bash
-python scripts/run_cub_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 3483 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 1440 --rel_gsr_mode granularity --rel_gsr_class_power 0.25 --rel_gsr_instance_power 0.5 --rel_gsr_floor 0.5 --run_dir out/CUB/gsr_G2_seed_3483
+python scripts/run_cub_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0.5 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 3483 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 1440 --rel_gsr_mode granularity --rel_gsr_class_power 0.25 --rel_gsr_instance_power 0.5 --rel_gsr_floor 0.5
 ```
 
-**CUB-G3**
+**CUB-G3：类别强度 0.5，实例强度 1**
 
 ```bash
-python scripts/run_cub_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 3483 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 1440 --rel_gsr_mode granularity --rel_gsr_class_power 0.5 --rel_gsr_instance_power 0.25 --rel_gsr_floor 0.5 --run_dir out/CUB/gsr_G3_seed_3483
+python scripts/run_cub_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0.5 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 3483 --nepoch 300 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 1440 --rel_gsr_mode granularity --rel_gsr_class_power 0.5 --rel_gsr_instance_power 0.25 --rel_gsr_floor 0.5
 ```
 
 ### SUN GSR 独立命令
 
-**SUN-G0**
+**SUN-G0：类别强度 0.5，实例强度 0.5**
 
 ```bash
-python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 4115 --nepoch 400 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 400 --rel_gsr_mode fixed --rel_gsr_class_power 0.5 --rel_gsr_instance_power 0.5 --rel_gsr_floor 0.5 --run_dir out/SUN/gsr_G0_seed_4115
+python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0.5 --rel_generator_instance_weight 0.5 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 4115 --nepoch 400 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 400 --rel_gsr_mode fixed
 ```
 
-**SUN-G1**
+**SUN-G1：类别强度 0.5，实例强度 0.5**
 
 ```bash
-python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 4115 --nepoch 400 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 400 --rel_gsr_mode shared --rel_gsr_class_power 0.5 --rel_gsr_instance_power 0.5 --rel_gsr_floor 0.5 --run_dir out/SUN/gsr_G1_seed_4115
+python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0.5 --rel_generator_instance_weight 0.5 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 4115 --nepoch 400 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 400 --rel_gsr_mode shared --rel_gsr_class_power 0.5 --rel_gsr_instance_power 0.5 --rel_gsr_floor 0.5
 ```
 
-**SUN-G2**
+**SUN-G2：类别强度 0.5，实例强度 0.5**
 
 ```bash
-python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 4115 --nepoch 400 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 400 --rel_gsr_mode granularity --rel_gsr_class_power 0.25 --rel_gsr_instance_power 0.5 --rel_gsr_floor 0.5 --run_dir out/SUN/gsr_G2_seed_4115
+python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0.5 --rel_generator_instance_weight 0.5 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 4115 --nepoch 400 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 400 --rel_gsr_mode granularity --rel_gsr_class_power 0.25 --rel_gsr_instance_power 0.5 --rel_gsr_floor 0.5
 ```
 
-**SUN-G3**
+**SUN-G3：类别强度 0.5，实例强度 0.5**
 
 ```bash
-python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 1 --rel_generator_instance_weight 1 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_reliability_floor 0.5 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 4115 --nepoch 400 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 400 --rel_gsr_mode granularity --rel_gsr_class_power 0.5 --rel_gsr_instance_power 0.25 --rel_gsr_floor 0.5 --run_dir out/SUN/gsr_G3_seed_4115
+python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga --rel_generator_class_weight 0.5 --rel_generator_instance_weight 0.5 --rel_pair_grouping matched --rel_class_weight 1 --rel_instance_weight 1 --rel_teacher_anchor_weight 1 --rel_proj_dim 512 --rel_dist_ratio 1 --rel_angle_ratio 2 --rel_angle_max_samples 128 --rel_use_angle --rel_time_pair_weight 1 --rel_time_mode fixed --rel_time_strength 0 --rel_topology_norm timestep --g_batch_mode pk --g_pk_classes 16 --g_pk_samples 4 --g_timestep_policy class_group --batch_size 64 --n_T 4 --manualSeed 4115 --nepoch 400 --eval_interval 5 --training_checkpoint_interval 5 --syn_num 400 --rel_gsr_mode granularity --rel_gsr_class_power 0.5 --rel_gsr_instance_power 0.25 --rel_gsr_floor 0.5
 ```
 
 ### GSR 验收与结果记录
@@ -314,7 +336,7 @@ python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga 
 - 有效对与覆盖预期沿用 S1。空块按粒度分别排除，但不会重新缩放日程权重；
   权重均值为 1 不保证实际梯度预算相同。非固定 GSR 不接受 mixed 分组。
 - 保持同一 DRG、训练种子、常数系数、评估频率和生成数量，比较固定/共享/差异/交换。
-  后续至少复核三个训练种子；更换种子时同时更改 run_dir。H、U、S 取同一 GZSL 记录，
+  后续至少复核三个训练种子；切换实验或种子前先记录结果。H、U、S 取同一 GZSL 记录，
   T1 单独标注 ZSL 结果，保留负结果和运行耗时。
 - 本轮沿用原测试集逐轮最优的历史评估口径，结果表应标明；不得将其称为新增的
   独立验证集选参结果。诊断只作为既有研究动机参考，不新增方法诊断。

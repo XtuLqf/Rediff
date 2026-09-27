@@ -41,6 +41,28 @@ python -m diagnostics.run_baseline \
 Use a new `--run_dir` for a new training run. The diagnostic seed controls
 balanced episode sampling and paired noise, not the DFG training seed.
 
+### Existing flat-output runs
+
+If DFG was trained without `--run_dir`, the checkpoint is under `out/AWA2/`
+with a long filename. The `*_training_last.tar` file is for training recovery;
+diagnosis should use the corresponding `*gzsl_VCS.tar` best-model file. Find it
+on the server:
+
+```bash
+find out/AWA2 -maxdepth 1 -type f -name '*gzsl_VCS.tar' -print
+```
+
+Pass the actual path to `--checkpoint`. Before diagnosis, confirm it is a
+clean baseline checkpoint rather than S0 or another relation-enabled run:
+
+```bash
+python -c 'import sys; from diagnostics.checkpoint_guard import load_baseline_checkpoint; load_baseline_checkpoint(sys.argv[1]); print("Clean baseline checkpoint")' 'out/AWA2/<actual-gzsl_VCS-filename>.tar'
+```
+
+The baseline guard rejects relation-enabled checkpoints. A run using
+`--gamma_rel 0` saves no VSRA state. Keep the server checkout current: the
+two-panel diagnostic script was introduced in commit `c26b755`.
+
 ## Diagnose another clean checkpoint
 
 ```bash
