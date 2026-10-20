@@ -135,6 +135,45 @@ python -m feature_export.export \
 
 输出目录必须不存在，避免覆盖论文实验。程序完成全部文件写入后才发布该目录。
 
+### 现有 out/AWA2 长文件名的一键启动器
+
+`scripts/export_awa2_plot_features.py` 已按本次列出的权重文件名配置：DFG 选择
+`gzsl_VCS.tar`，100%/30%/10% 的文件名分别包含 `num:5400`、`num:1800`、`num:600`。
+脚本根据自身位置定位项目根目录，所以也可以从 `out/AWA2` 内调用。
+先将新增启动器和 `feature_export/` 同步到服务器，再在激活的训练环境中执行：
+
+```bash
+cd ~/pytorch/lqf/Rediff
+python scripts/export_awa2_plot_features.py
+```
+
+默认导出 100% DFG + 100% DRG，方法名 Rediff，单步采样，两种视图，每类 100 个生成样本，
+种子 9182，设备 cuda:0。可加 `--dry-run` 先查看完整命令，不加载数据或权重。
+
+**30%/10% 的 DRG 不能仅凭文件名推断。** 当前 AWA2 训练启动器默认选择 100% DRG，
+即使覆盖 `--split_percent` 也不会自动切换。请沿用该次训练实际传入的
+`--netR_model_path`（可从训练日志的完整参数或保存的 training_config 查看）。
+因此导出启动器要求这两种比例显式提供 `--drg-percent` 或 `--drg-checkpoint`。
+
+如果实际训练使用同训练比例的 DRG：
+
+```bash
+python scripts/export_awa2_plot_features.py --split-percent 30 --drg-percent 30
+python scripts/export_awa2_plot_features.py --split-percent 10 --drg-percent 10
+```
+
+如果两次训练都沿用默认 100% DRG，则对应使用：
+
+```bash
+python scripts/export_awa2_plot_features.py --split-percent 30 --drg-percent 100
+python scripts/export_awa2_plot_features.py --split-percent 10 --drg-percent 100
+```
+
+100pct 的协议存在时，30%/10% 会自动复用并校验；也可显式传 `--protocol`。
+baseline 项目使用 `--method ZeroDiff` 并提供当前项目的协议路径。其他支持参数可用
+`python scripts/export_awa2_plot_features.py --help` 查看。此启动器只配置文件选择和参数，
+实际导出仍由 `feature_export.export` 完成。
+
 ## 4. 输出目录和 NPZ 字段
 
 ```text
