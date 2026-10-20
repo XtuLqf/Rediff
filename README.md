@@ -60,6 +60,9 @@ Firstly, download these datasets as well as the xlsa17 and our data splitting an
 ## Training
 
 The isolated baseline diagnostics are documented in `diagnostics/README.md`.
+AWA2 offline feature export for paper comparisons, including the shared interface
+for a separate ZeroDiff baseline and plotting project, is documented in
+[`docs/FEATURE_EXPORT_INTERFACE.md`](docs/FEATURE_EXPORT_INTERFACE.md).
 The state-aware dual-granularity relation method and its class/instance ablation
 order are documented in `RELATION_CONSISTENCY.md`. End-to-end commands for the
 Python 3.10 / PyTorch 2.9.1+cu130 Linux server are in `SERVER_RUNBOOK.md`.
