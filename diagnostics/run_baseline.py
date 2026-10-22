@@ -115,22 +115,15 @@ def plot_diagnosis(rows: Sequence[Dict[str, str]], output_dir: Path) -> List[Pat
         "instance_relation_loss",
         "class_relation_spearman",
         "instance_relation_spearman",
-        "signal_retention",
     )
     summaries = {key: aggregate_by_timestep(rows, key) for key in keys}
     timesteps = np.asarray(
-        [row["timestep"] for row in summaries["signal_retention"]], dtype=int
+        [row["timestep"] for row in summaries["class_relation_loss"]], dtype=int
     )
-    retention = np.asarray(
-        [row["mean"] for row in summaries["signal_retention"]], dtype=float
-    )
-    tick_labels = [
-        f"{timestep}\n{value:.3f}" for timestep, value in zip(timesteps, retention)
-    ]
 
     def configure_axis(axis) -> None:
-        axis.set_xlabel("Diffusion timestep t\nsignal retention alpha_bar[t+1]")
-        axis.set_xticks(timesteps, tick_labels)
+        axis.set_xlabel("Diffusion timestep t")
+        axis.set_xticks(timesteps, [str(timestep) for timestep in timesteps])
         axis.grid(alpha=0.25)
 
     def draw_error(axis) -> None:
@@ -142,7 +135,6 @@ def plot_diagnosis(rows: Sequence[Dict[str, str]], output_dir: Path) -> List[Pat
             axis, summaries["instance_relation_loss"],
             "Within-class PaCo", COLORS["instance"],
         )
-        axis.set_title("(a) Relation alignment error")
         axis.set_ylabel("Normalized distance error (Smooth L1)")
         configure_axis(axis)
         axis.legend(frameon=False)
@@ -156,12 +148,10 @@ def plot_diagnosis(rows: Sequence[Dict[str, str]], output_dir: Path) -> List[Pat
             axis, summaries["instance_relation_spearman"],
             "Within-class PaCo", COLORS["instance"],
         )
-        axis.set_title("(b) Relation rank agreement")
         axis.set_ylabel("Spearman correlation (higher is better)")
         configure_axis(axis)
         axis.legend(frameon=False)
 
-    title = "Frozen ZeroDiff: dual-granularity relation diagnostics"
     figures = (
         ("diagnosis_a_relation_error.png", (draw_error,), (6.8, 4.8)),
         ("diagnosis_b_rank_agreement.png", (draw_rank,), (6.8, 4.8)),
@@ -176,7 +166,6 @@ def plot_diagnosis(rows: Sequence[Dict[str, str]], output_dir: Path) -> List[Pat
         axes = np.atleast_1d(axes)
         for axis, draw in zip(axes, drawers):
             draw(axis)
-        figure.suptitle(title)
         path = output_dir / filename
         figure.savefig(path, dpi=240, bbox_inches="tight")
         plt.close(figure)

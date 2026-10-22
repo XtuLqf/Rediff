@@ -84,8 +84,11 @@ out/diagnostics/AWA2/
 
 The first figure shows normalized distance alignment error; the second shows
 Spearman rank agreement; `diagnosis.png` combines the two panels. No gradient
-panel or gradient metrics are produced. The x-axis reports both the generator
-timestep and actual `alpha_bar[t+1]` signal retention.
+panel or gradient metrics are produced. All three figures omit the overall
+title and panel titles for use in a paper. The x-axis shows only
+`Diffusion timestep t` and integer timestep ticks; signal retention remains
+in the CSV but is not displayed on the figures. See [导出图片说明.md](导出图片说明.md)
+for the Chinese explanation of the metrics, shading, and interpretation.
 
 Running another seed adds one CSV and rebuilds all three figures from matching
 CSV files for the same dataset, checkpoint, and episode configuration. Running
