@@ -2,6 +2,7 @@
 
 生成端为 Rediff，评价端复用 ZeroDiff 的类别均值、余弦距离、三元组枚举和反转规则。
 仅评价全部未见类别的原始 2048 维视觉特征 V。无需重新训练、分类器或 `con_paco.mat`。
+VCS 补充实验见 [VCS_RELATION_DIAGNOSTIC.md](VCS_RELATION_DIAGNOSTIC.md)，它固定本页的有效三元组，只改变生成表征空间。
 
 代码通过 Git 同步到服务器即可运行；数据、checkpoint、参考结果包和运行结果均不需要加入 Git。
 所有命令从 Rediff 仓库根目录运行，使用安装了本项目依赖的 Python 环境。
@@ -9,7 +10,7 @@
 本地提交时明确选择本次代码与文档，避免把已有的 `tmp/`、`output/` 等无关内容一并加入：
 
 ```bash
-git add README.md SERVER_RUNBOOK.md docs/RELATION_DIAGNOSTIC.md feature_export scripts/diagnose_relations.py scripts/compare_relations.py tests/test_relation_diagnostic.py
+git add README.md SERVER_RUNBOOK.md docs/RELATION_DIAGNOSTIC.md docs/VCS_RELATION_DIAGNOSTIC.md feature_export scripts/diagnose_relations.py scripts/compare_relations.py scripts/compare_vcs_relations.py scripts/run_vcs_diagnostics.py tests/test_relation_diagnostic.py tests/test_vcs_diagnostic.py
 git commit -m "Add Rediff class relation diagnostics with verified ZeroDiff references"
 git push
 ```

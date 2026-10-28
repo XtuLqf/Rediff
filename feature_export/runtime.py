@@ -19,6 +19,7 @@ DEFAULTS = {
     "decoder_layer_sizes": [4096, 2048], "class_embedding": "att",
     "class_embedding_norm": True, "preprocessing": True,
     "standardization": False, "validation": False,
+    "ngh": 4096,
 }
 
 
@@ -53,6 +54,8 @@ def load_options(split_percent: int, config_path: Path | None = None, dataset: s
             or not isinstance(values["noiseSize"], int) or values["noiseSize"] < 1
             or not isinstance(values["dim_t"], int) or values["dim_t"] < 2):
         raise ValueError("Invalid generator dimensions or diffusion step count.")
+    if type(values["ngh"]) is not int or values["ngh"] < 1:
+        raise ValueError("ngh must be a positive decoder hidden dimension.")
     if not all(math.isfinite(values[key]) and values[key] > 0 for key in ("ddpmbeta1", "ddpmbeta2")):
         raise ValueError("Diffusion betas must be finite and positive.")
     layers = list(values["decoder_layer_sizes"])
@@ -75,7 +78,7 @@ def load_weights(path: Path) -> dict:
 
 
 class FeatureRuntime:
-    def __init__(self, options, dfg_checkpoint: Path, drg_checkpoint: Path, device: str):
+    def __init__(self, options, dfg_checkpoint: Path, drg_checkpoint: Path, device: str, *, with_decoder=False):
         self.options = options
         self.device = torch.device(device)
         # Initialization should not affect the local generation streams.
@@ -87,6 +90,13 @@ class FeatureRuntime:
         self.netG.load_state_dict(dfg["state_dict_G"], strict=True)
         self.method_metadata = dfg.get("method_metadata")
         self.has_relation_state = "state_dict_VSRA" in dfg
+        self.netDec = None
+        if with_decoder:
+            if "state_dict_Dec" not in dfg:
+                raise KeyError("VCS requires state_dict_Dec in the DFG checkpoint.")
+            self.netDec = zerodiff_tools.V2S_mapping(options, options.attSize).to(self.device)
+            self.netDec.load_state_dict(dfg["state_dict_Dec"], strict=True)
+            self.netDec.eval().requires_grad_(False)
         del dfg
         drg = load_weights(drg_checkpoint)
         key = next((key for key in ("state_dict_G_con", "state_dict_R") if key in drg), None)
@@ -101,7 +111,7 @@ class FeatureRuntime:
         )
 
     @torch.no_grad()
-    def sample(self, attributes: torch.Tensor, sampling: str, cpu_rng, posterior_rng):
+    def sample(self, attributes: torch.Tensor, sampling: str, cpu_rng, posterior_rng, *, return_contrastive=False):
         if sampling not in ("one-step", "progressive"):
             raise ValueError(f"Unknown sampling mode: {sampling}")
         attributes = attributes.to(self.device)
@@ -119,7 +129,8 @@ class FeatureRuntime:
         r_tp1 = initial_noise(2048)
         contrastive = self.netR(z_con, attributes, r_tp1, times)
         if sampling == "one-step":
-            return self.netG(z, attributes, contrastive, x_tp1, times).cpu()
+            prediction = self.netG(z, attributes, contrastive, x_tp1, times).cpu()
+            return (prediction, contrastive.cpu()) if return_contrastive else prediction
         for timestep in reversed(range(options.n_T)):
             times.fill_(timestep)
             prediction = self.netG(z, attributes, contrastive, x_tp1, times)
@@ -129,10 +140,26 @@ class FeatureRuntime:
             log_var = zerodiff_tools.extract(posterior.posterior_log_variance_clipped, times, x_tp1.shape)
             noise = torch.randn(x_tp1.shape, generator=posterior_rng, device=self.device, dtype=x_tp1.dtype)
             x_tp1 = mean + (times != 0).float()[:, None] * torch.exp(0.5 * log_var) * noise
-        return prediction.cpu()
+        return (prediction.cpu(), contrastive.cpu()) if return_contrastive else prediction.cpu()
+
+    @property
+    def vcs_dim(self):
+        return self.options.resSize + self.options.attSize + self.options.ngh + 2048
+
+    @torch.no_grad()
+    def compose_vcs(self, visual, contrastive):
+        """Same order and scaling as CLASSIFIER.compute_dec_out(useV/S/C=True)."""
+        if self.netDec is None:
+            raise ValueError("VCS requires a strictly loaded decoder.")
+        visual = visual.to(self.device)
+        semantic = self.netDec(visual)
+        hidden = self.netDec.getLayersOutDet()
+        return torch.cat((visual, semantic, hidden, contrastive.to(self.device)), dim=1).cpu()
 
 
-def generate_features(runtime, data, count: int, seed: int, batch_size: int, sampling: str):
+def generate_features(runtime, data, count: int, seed: int, batch_size: int, sampling: str, *, feature_space="V"):
+    if feature_space not in ("V", "VCS"):
+        raise ValueError("feature_space must be V or VCS.")
     features, labels = [], []
     for class_id in data.class_ids.tolist():
         class_seed = (seed + 1_000_003 * class_id) % (2**63 - 1)
@@ -142,8 +169,13 @@ def generate_features(runtime, data, count: int, seed: int, batch_size: int, sam
         for start in range(0, count, batch_size):
             size = min(batch_size, count - start)
             attributes = data.attributes[class_id].repeat(size, 1)
-            prediction = runtime.sample(attributes, sampling, cpu_rng, posterior_rng)
-            if prediction.shape != (size, runtime.options.resSize) or not torch.isfinite(prediction).all():
+            if feature_space == "VCS":
+                visual, contrastive = runtime.sample(attributes, sampling, cpu_rng, posterior_rng, return_contrastive=True)
+                prediction = runtime.compose_vcs(visual, contrastive)
+            else:
+                prediction = runtime.sample(attributes, sampling, cpu_rng, posterior_rng)
+            width = runtime.vcs_dim if feature_space == "VCS" else runtime.options.resSize
+            if prediction.shape != (size, width) or not torch.isfinite(prediction).all():
                 raise ValueError("Generator returned invalid visual features.")
             features.append(prediction)
             labels.extend([class_id] * size)

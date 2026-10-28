@@ -30,6 +30,11 @@ def parse_args(argv=None):
                         help="Replay fixed ZeroDiff results without data or checkpoints, then exit.")
     parser.add_argument("--dataset", choices=list(DATASET_SPECS))
     parser.add_argument("--reference-results", type=Path)
+    parser.add_argument("--feature-space", choices=["V", "VCS"], default="V")
+    parser.add_argument("--method", choices=["Rediff", "ZeroDiff"], default="Rediff",
+                        help="ZeroDiff is supported for the supplementary VCS diagnostic.")
+    parser.add_argument("--visual-results", type=Path,
+                        help="Original V results for these exact weights; required for VCS (ZeroDiff defaults to reference-results).")
     parser.add_argument("--dataroot", type=Path, default=ROOT / "Dataset")
     parser.add_argument("--dfg-checkpoint", type=Path)
     parser.add_argument("--drg-checkpoint", type=Path, help="The actual DRG paired with this DFG during training.")
@@ -55,8 +60,15 @@ def parse_args(argv=None):
     args.seeds = args.seeds if args.seeds is not None else [SEEDS[args.dataset]]
     if args.seeds != [SEEDS[args.dataset]]:
         parser.error("This fixed comparison requires the dataset's single prescribed generation seed")
+    if args.feature_space == "V" and (args.method != "Rediff" or args.visual_results is not None):
+        parser.error("--method ZeroDiff and --visual-results are supported with --feature-space VCS")
+    if args.feature_space == "VCS" and args.visual_results is None:
+        args.visual_results = (args.reference_results if args.method == "ZeroDiff" else
+                               ROOT / "out/relation_diagnostic" / f"{args.dataset}_rediff_{args.seeds[0]}" / "results.zip")
     if args.output_dir is None:
-        args.output_dir = ROOT / "out" / "relation_diagnostic" / f"{args.dataset}_rediff_{args.seeds[0]}"
+        name = (f"{args.dataset}_{args.method.lower()}_vcs_{args.seeds[0]}" if args.feature_space == "VCS" else
+                f"{args.dataset}_rediff_{args.seeds[0]}")
+        args.output_dir = ROOT / "out" / "relation_diagnostic" / name
     return args
 
 
@@ -145,17 +157,9 @@ def write_results(output, summary, arrays, rows, outcomes, manifest):
     return output
 
 
-def run(args, reference):
+def configure_device(requested):
     import torch
-    import scipy
-    import sklearn
-    from feature_export.data import load_dataset
-    from feature_export.generation import RNG_POLICY, VisualFeatureGenerator
-
-    output = args.output_dir.resolve()
-    if output.exists():
-        raise FileExistsError(f"Output already exists: {output}; choose a new --output-dir.")
-    device = args.device if args.device != "auto" else ("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = requested if requested != "auto" else ("cuda:0" if torch.cuda.is_available() else "cpu")
     resolved = torch.device(device)
     if resolved.type not in ("cpu", "cuda") or (resolved.type == "cuda" and not torch.cuda.is_available()):
         raise ValueError(f"Unsupported or unavailable device: {device}.")
@@ -164,6 +168,45 @@ def run(args, reference):
     torch.use_deterministic_algorithms(True)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
+    return device
+
+
+def make_manifest(args, adapter, data, reference, alignment):
+    import torch
+    import scipy
+    import sklearn
+    from feature_export.generation import RNG_POLICY
+    source_paths = sorted((ROOT / "feature_export").glob("*.py")) + [
+        ROOT / "scripts/diagnose_relations.py", ROOT / "scripts/compare_relations.py",
+        ROOT / "scripts/compare_vcs_relations.py", ROOT / "scripts/run_vcs_diagnostics.py",
+        ROOT / "zerodiff_tools.py", ROOT / "datasets/image_util.py", ROOT / "classifiers/classifier_images.py"]
+    return {"schema_version": "class-relations-v1", "method": args.method, "dataset": args.dataset,
+            "generated_space": args.feature_space,
+            "created_utc": datetime.now(timezone.utc).isoformat(), "device": str(adapter.runtime.device),
+            "options": vars(adapter.options), "batch_size": args.batch_size, "seeds": args.seeds,
+            "rng_policy": RNG_POLICY, "git": git_provenance(),
+            "versions": {"python": platform.python_version(), "numpy": np.__version__, "torch": torch.__version__,
+                         "scipy": scipy.__version__, "scikit_learn": sklearn.__version__},
+            "dfg_checkpoint": {"path": str(args.dfg_checkpoint.resolve()), "sha256": adapter.dfg_sha256},
+            "drg_checkpoint": {"path": str(args.drg_checkpoint.resolve()), "sha256": adapter.drg_sha256},
+            "training_config": ({"path": str(adapter.config_path.resolve()), "sha256": sha256_file(adapter.config_path)}
+                                if adapter.config_path else None),
+            "training_config_status": adapter.config_status, "checkpoint_pairing": adapter.pairing_status,
+            "checkpoint_method_metadata": adapter.runtime.method_metadata,
+            "checkpoint_has_relation_state": adapter.runtime.has_relation_state,
+            "data": data.files, "data_alignment": data.alignment,
+            "reference": {"path": str(reference.path), "sha256": reference.sha256,
+                          "acceptance": verify_baseline(reference), "alignment": alignment},
+            "source_sha256": {p.relative_to(ROOT).as_posix(): sha256_file(p) for p in source_paths}}
+
+
+def run(args, reference):
+    from feature_export.data import load_dataset
+    from feature_export.generation import VisualFeatureGenerator
+    output = args.output_dir.resolve()
+    if output.exists():
+        raise FileExistsError(f"Output already exists: {output}; choose a new --output-dir.")
+    device = configure_device(args.device)
     adapter = VisualFeatureGenerator(dataset=args.dataset, device=device, dfg_checkpoint=args.dfg_checkpoint,
                                      drg_checkpoint=args.drg_checkpoint, training_config=args.training_config)
     data = load_dataset(args.dataroot, adapter.options)
@@ -188,26 +231,7 @@ def run(args, reference):
     arrays.update(generated_centers=np.stack(centers), generated_distances=np.stack(distances),
                   seeds=np.asarray(args.seeds, dtype=np.int64))
     summary = make_summary(args.dataset, args.seeds, reference.rows, records, outcomes, reference)
-    source_paths = sorted((ROOT / "feature_export").glob("*.py")) + [
-        ROOT / "scripts/diagnose_relations.py", ROOT / "scripts/compare_relations.py",
-        ROOT / "zerodiff_tools.py", ROOT / "datasets/image_util.py"]
-    manifest = {"schema_version": "class-relations-v1", "method": "Rediff", "dataset": args.dataset,
-                "created_utc": datetime.now(timezone.utc).isoformat(), "device": str(adapter.runtime.device),
-                "options": vars(adapter.options), "batch_size": args.batch_size, "seeds": args.seeds,
-                "rng_policy": RNG_POLICY, "git": git_provenance(),
-                "versions": {"python": platform.python_version(), "numpy": np.__version__, "torch": torch.__version__,
-                             "scipy": scipy.__version__, "scikit_learn": sklearn.__version__},
-                "dfg_checkpoint": {"path": str(args.dfg_checkpoint.resolve()), "sha256": adapter.dfg_sha256},
-                "drg_checkpoint": {"path": str(args.drg_checkpoint.resolve()), "sha256": adapter.drg_sha256},
-                "training_config": ({"path": str(adapter.config_path.resolve()), "sha256": sha256_file(adapter.config_path)}
-                                    if adapter.config_path else None),
-                "training_config_status": adapter.config_status, "checkpoint_pairing": adapter.pairing_status,
-                "checkpoint_method_metadata": adapter.runtime.method_metadata,
-                "checkpoint_has_relation_state": adapter.runtime.has_relation_state,
-                "data": data.files, "data_alignment": data.alignment,
-                "reference": {"path": str(reference.path), "sha256": reference.sha256,
-                              "acceptance": verify_baseline(reference), "alignment": alignment},
-                "source_sha256": {p.relative_to(ROOT).as_posix(): sha256_file(p) for p in source_paths}}
+    manifest = make_manifest(args, adapter, data, reference, alignment)
     write_results(output, summary, arrays, reference.rows, outcomes, manifest)
     print(f"Results: {output / 'results.zip'}", flush=True)
     return summary
@@ -224,6 +248,8 @@ def main(argv=None):
     paths += [args.dataroot / args.dataset / name for name in ("res101.mat", "ce_ce.mat", split)]
     if args.training_config is not None:
         paths.append(args.training_config)
+    if args.visual_results is not None:
+        paths.append(args.visual_results)
     for path in paths:
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -235,4 +261,7 @@ def main(argv=None):
         print(json.dumps({"status": "paths_and_reference_passed", "note": "Weights and local data alignment are checked during generation.",
                           "inputs": [str(p.resolve()) for p in paths]}, indent=2))
         return None
+    if args.feature_space == "VCS":
+        from feature_export.vcs import run_vcs
+        return run_vcs(args, reference)
     return run(args, reference)

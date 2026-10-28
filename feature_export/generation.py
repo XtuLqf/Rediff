@@ -26,7 +26,10 @@ RNG_POLICY = {
 class VisualFeatureGenerator:
     """Reusable adapter; model initialization never consumes the class RNGs."""
 
-    def __init__(self, *, dataset, device, dfg_checkpoint, drg_checkpoint, training_config=None):
+    def __init__(self, *, dataset, device, dfg_checkpoint, drg_checkpoint, training_config=None, feature_space="V"):
+        if feature_space not in ("V", "VCS"):
+            raise ValueError("feature_space must be V or VCS.")
+        self.feature_space = feature_space
         dfg_checkpoint, drg_checkpoint = Path(dfg_checkpoint), Path(drg_checkpoint)
         config = Path(training_config) if training_config is not None else None
         if config is None and (dfg_checkpoint.parent / "config.json").is_file():
@@ -64,7 +67,7 @@ class VisualFeatureGenerator:
     @property
     def runtime(self):
         if self._runtime is None:
-            self._runtime = FeatureRuntime(*self._runtime_args)
+            self._runtime = FeatureRuntime(*self._runtime_args, with_decoder=self.feature_space == "VCS")
         return self._runtime
 
     def generate(self, *, class_ids, attributes, samples_per_class, seed, batch_size, sampling):
@@ -86,7 +89,7 @@ class VisualFeatureGenerator:
                 attributes.norm(dim=1), torch.ones(spec["classes"]), rtol=1e-5, atol=1e-6):
             raise ValueError("The generation semantic table must already be L2 normalized.")
         features, labels = generate_features(self.runtime, SimpleNamespace(class_ids=class_ids, attributes=attributes),
-                                             samples_per_class, seed, batch_size, sampling)
+                                             samples_per_class, seed, batch_size, sampling, feature_space=self.feature_space)
         if not np.array_equal(labels, np.repeat(class_ids, samples_per_class)):
             raise ValueError("Unexpected generated class order.")
         return features, labels

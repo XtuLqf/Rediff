@@ -10,12 +10,14 @@ import tempfile
 import numpy as np
 
 from feature_export.diagnostic import write_csv, write_json
-from feature_export.reference import read_result, triplet_signature, verify_baseline
+from feature_export.reference import VCS_SCHEMA, read_result, triplet_signature, verify_baseline
 from feature_export.relation_report import percent
 
 
 def comparison_row(rediff, reference):
     verify_baseline(reference)
+    if rediff.summary.get("schema_version") == VCS_SCHEMA:
+        raise ValueError("Use compare_vcs_relations.py for VCS results; V and VCS rates cannot be mixed.")
     if rediff.summary.get("method") != "Rediff":
         raise ValueError("Expected a Rediff result package.")
     for key in ("dataset", "split", "sampling", "seeds", "samples_per_class", "min_gap", "tie_gap", "distance"):

@@ -22,6 +22,19 @@ def report_markdown(summary):
                   f"{percent(comparison['zerodiff_reversal_rate'])}; tie rate "
                   f"{percent(comparison['zerodiff_tie_rate'])}.",
                   f"Rediff minus ZeroDiff: {comparison['delta_percentage_points']:+.6f} percentage points."]
+    if summary.get("generated_space") == "VCS":
+        lines += ["", "## Paired V control / supplementary VCS", "",
+                  "Eligibility remains fixed by semantics and real V. VCS uses each method's own frozen decoder.",
+                  "Each sample is concatenated as [V, Dec(V), decoder hidden, C] before class averaging.",
+                  "Native classifier scaling is retained; this does not measure real VCS geometry or classification accuracy.", "",
+                  "| Seed | V strict preservation | VCS strict preservation | VCS minus V (pp) |",
+                  "|---|---:|---:|---:|"]
+        for control, record in zip(summary["visual_control"]["per_seed"], summary["per_seed"]):
+            delta = (None if record["preservation_rate"] is None else
+                     100 * (record["preservation_rate"] - control["preservation_rate"]))
+            label = "undefined" if delta is None else f"{delta:+.6f}"
+            lines.append(f"| {record['seed']} | {percent(control['preservation_rate'])} | "
+                         f"{percent(record['preservation_rate'])} | {label} |")
     lines += ["", f"Conclusion: `{summary['conclusion']}`.",
               "", "Features are averaged in float64 before cosine distances are calculated.",
               "Eligibility depends only on semantics and real visual centers from the verified reference.",
@@ -38,7 +51,8 @@ def figure_svg(summary, rows, outcomes, class_names):
     def text(x, y, value, size=16):
         parts.append(f'<text x="{x}" y="{y}" font-size="{size}">{escape(str(value))}</text>')
 
-    text(30, 36, f"{summary['method']}: {summary['dataset']} unseen class relations", 25)
+    generated_space = summary.get("generated_space", "V")
+    text(30, 36, f"{summary['method']}: {summary['dataset']} unseen class relations ({generated_space})", 25)
     text(30, 66, f"Eligible: {summary['eligible_triplets']} / {summary['total_triplets']}; "
          f"semantic and real relative gaps strictly greater than {summary['min_gap']}")
     text(30, 110, "Observed reversal example", 20)
@@ -54,7 +68,7 @@ def figure_svg(summary, rows, outcomes, class_names):
             text(30, 145 + index * 25, f"{role}: {label[:54]}", 14)
         spaces = [("Semantics", row["semantic_near"], row["semantic_far"]),
                   ("Real visual centers", row["real_near"], row["real_far"]),
-                  ("Generated visual centers", outcome["generated_near"], outcome["generated_far"])]
+                  (f"Generated {generated_space} centers", outcome["generated_near"], outcome["generated_far"])]
         for index, (label, near, far) in enumerate(spaces):
             y = 235 + index * 95
             text(30, y, label)
@@ -67,7 +81,10 @@ def figure_svg(summary, rows, outcomes, class_names):
         text(30, 575, "Each space uses its own distance scale.", 14)
     text(630, 110, "Measured reversal and tie rates", 20)
     comparison = summary.get("comparison")
-    records = [("Rediff", r["reversal_rate"], r["tie_rate"]) for r in summary["per_seed"]]
+    records = [(f"{summary['method']} {generated_space}", r["reversal_rate"], r["tie_rate"]) for r in summary["per_seed"]]
+    if generated_space == "VCS":
+        records = [("Paired V control", r["reversal_rate"], r["tie_rate"])
+                   for r in summary["visual_control"]["per_seed"]] + records
     if comparison:
         records.insert(0, ("ZeroDiff", comparison["zerodiff_reversal_rate"], comparison["zerodiff_tie_rate"]))
     max_rate = max([v for _, reversal, tie in records for v in (reversal, tie) if v is not None] + [0.01])
@@ -81,6 +98,8 @@ def figure_svg(summary, rows, outcomes, class_names):
             text(1020, y + offset + 15, percent(value), 13)
     if comparison:
         text(630, 550, f"Change: {comparison['delta_percentage_points']:+.6f} percentage points", 17)
-    text(30, 625, "Original 2048-D visual means; one-step inference; ties do not count as reversals.", 14)
+    footer = ("VCS means; eligibility fixed by semantics and real V; classifier-native block scaling."
+              if generated_space == "VCS" else "Original 2048-D visual means; one-step inference; ties do not count as reversals.")
+    text(30, 625, footer, 14)
     parts.append("</g></svg>")
     return "\n".join(parts)
