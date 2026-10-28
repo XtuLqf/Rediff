@@ -1,0 +1,36 @@
+{
+  "source": "D:\\.湘潭大学学习文档\\小论文\\初稿-中文.docx",
+  "output": "D:\\GitCode\\Rediff\\tmp\\introduction_revision_20261027\\初稿-中文.docx",
+  "backup": "D:\\GitCode\\Rediff\\tmp\\introduction_revision_20261027\\originals\\初稿-中文.docx",
+  "source_sha256": "0f9ea7c1b86c5c43d76d3c8134372b6b6379560474e44c15f126de75b33cfd72",
+  "output_sha256": "e4495684e48634b40e3f3514b0e6c7ad465a5a682b0cd259fe2664462f924be0",
+  "body_paragraphs": 5,
+  "contributions": 3,
+  "hanzi_count_excluding_caption": 1198,
+  "preserved_drawings": 7,
+  "preserved_math_objects": 74,
+  "figure_reference_changes": [
+    90,
+    92,
+    94
+  ],
+  "only_changed_package_member": "word/document.xml",
+  "visual_qa": {
+    "pages": 11,
+    "reviewed_pages": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "renderer": "Native Word PDF export and packaged render_docx.py rasterization"
+  },
+  "published": true
+}

@@ -1,0 +1,11 @@
+{
+  "caption": "图 2 不同训练样本比例下 AWA2 未见类特征的 t-SNE 可视化。上、下排分别为 ZeroDiff 和本文方法，各列依次对应 100%、30% 和 10% 的已见类训练样本。每类展示 100 个生成样本及全部真实样本；颜色表示类别，空心圆和星形分别表示真实与生成特征。各子图采用相同设置独立降维。",
+  "images": [
+    "D:\\CodexToDo\\Build-plot-features\\outputs\\zerodiff\\zerodiff_real_vs_generated_100pct_20261022_154700_d1bc8d86.png",
+    "D:\\CodexToDo\\Build-plot-features\\outputs\\zerodiff\\zerodiff_real_vs_generated_30pct_20261022_154700_d1bc8d86.png",
+    "D:\\CodexToDo\\Build-plot-features\\outputs\\zerodiff\\zerodiff_real_vs_generated_10pct_20261022_154700_d1bc8d86.png",
+    "D:\\CodexToDo\\Build-plot-features\\outputs\\rediff\\rediff_real_vs_generated_100pct_20261022_154700_d1bc8d86.png",
+    "D:\\CodexToDo\\Build-plot-features\\outputs\\rediff\\rediff_real_vs_generated_30pct_20261022_154700_d1bc8d86.png",
+    "D:\\CodexToDo\\Build-plot-features\\outputs\\rediff\\rediff_real_vs_generated_10pct_20261022_154700_d1bc8d86.png"
+  ]
+}

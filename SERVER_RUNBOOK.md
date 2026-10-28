@@ -343,3 +343,9 @@ python scripts/run_sun_zerodiff_DFG_train.py --gamma_rel 1 --rel_objective sdga 
 
 本地回归命令：`python -m pytest tests/test_gsr.py tests/test_relation_training.py -q`。
 这些测试验证实现与恢复，不代表服务器分类收益已经得到验证。
+
+## 类别关系反转诊断
+
+使用已有 Rediff 权重执行三数据集类别关系反转诊断，先验收 ZeroDiff 参考包，再生成和比较。
+完整命令、固定参数与输出说明见 [docs/RELATION_DIAGNOSTIC.md](docs/RELATION_DIAGNOSTIC.md)。
+代码通过 Git 同步；数据、权重和结果保留在服务器，不需要加入 Git。

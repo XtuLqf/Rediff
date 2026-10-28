@@ -10,6 +10,7 @@ from pathlib import Path
 import torch
 
 import zerodiff_tools
+from feature_export.specs import DATASET_SPECS
 
 
 DEFAULTS = {
@@ -21,21 +22,33 @@ DEFAULTS = {
 }
 
 
-def load_options(split_percent: int, config_path: Path | None = None):
-    values = dict(DEFAULTS)
-    training = {}
+def load_options(split_percent: int, config_path: Path | None = None, dataset: str = "AWA2", *, training_values=None):
+    if dataset not in DATASET_SPECS:
+        raise ValueError("dataset must be AWA2, CUB or SUN.")
+    spec = DATASET_SPECS[dataset]
+    values = {**DEFAULTS, "dataset": dataset, "attSize": spec["semantic_dim"],
+              "noiseSize": spec["semantic_dim"], "dim_t": spec["semantic_dim"],
+              "class_embedding": spec["embedding"], "class_embedding_norm": spec["normalize"]}
+    training = {} if training_values is None else training_values
+    if not isinstance(training, dict):
+        raise ValueError("Training config must be a dictionary.")
     if config_path is not None:
-        document = json.loads(config_path.read_text(encoding="utf-8"))
+        document = json.loads(config_path.read_text(encoding="utf-8-sig"))
+        if not isinstance(document, dict):
+            raise ValueError("Training config must be a JSON object.")
         training = document.get("training", document)
         if not isinstance(training, dict):
             raise ValueError("Training config must be a JSON object or contain a 'training' object.")
-        if "split_percent" in training and training["split_percent"] != split_percent:
-            raise ValueError("--split-percent disagrees with the training config.")
-        values.update({key: training[key] for key in DEFAULTS if key in training})
-    if values["dataset"] != "AWA2" or values["class_embedding"] != "att" or values["validation"]:
-        raise ValueError("Only the AWA2 att/test_unseen protocol is supported.")
-    if values["resSize"] != 2048 or values["attSize"] != 85:
-        raise ValueError("This export interface requires AWA2 V=2048 and attributes=85.")
+    if "split_percent" in training and training["split_percent"] != split_percent:
+        raise ValueError("--split-percent disagrees with the training config.")
+    values.update({key: training[key] for key in DEFAULTS if key in training})
+    for key in ("class_embedding_norm", "preprocessing", "standardization", "validation"):
+        if type(values[key]) is not bool:
+            raise ValueError(f"{key} must be a JSON boolean.")
+    if values["dataset"] != dataset or values["class_embedding"] != spec["embedding"] or values["validation"]:
+        raise ValueError(f"Only the {dataset} {spec['embedding']}/test_unseen protocol is supported.")
+    if values["resSize"] != 2048 or values["attSize"] != spec["semantic_dim"]:
+        raise ValueError(f"This interface requires {dataset} V=2048 and semantics={spec['semantic_dim']}.")
     if (not isinstance(values["n_T"], int) or values["n_T"] < 1
             or not isinstance(values["noiseSize"], int) or values["noiseSize"] < 1
             or not isinstance(values["dim_t"], int) or values["dim_t"] < 2):

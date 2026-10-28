@@ -1,0 +1,1309 @@
+
+=== PAGE 1 ===
+ZeroDiff++: Balancing Semantic Diffusion Dynamics for Robust Zero-Shot
+Learning
+Qin Li Qi Li Limei Liu Junfeng Yang Han Peng ∗
+Hunan University of Technology and Business, China
+Abstract
+Zero-shot learning (ZSL) aims to recognize unseen
+classes by leveraging shared semantic embeddings. Re-
+cent diffusion-based approaches, such as ZeroDiff, have
+achieved promising results by improving visual-semantic
+alignment via denoising-based generation and supervised
+contrastive learning. However, they adopt a fixed diffusion
+schedule for all classes, ignoring differences in semantic
+complexity. Simple classes tend to be over-diffused, los-
+ing discriminative cues, whereas complex classes remain
+under-diffused with insufficient semantic disentanglement,
+leading to a structural mismatch that we term Semantic Dif-
+fusion Imbalance (SDI). To mitigate SDI, we propose Ze-
+roDiff++, a three-path diffusion framework designed to bal-
+ance semantic dynamics across classes of different complex-
+ity. In addition to the original ZeroDiff pathway, ZeroD-
+iff++ introduces: (i) a weak diffusion branch (W-Branch)
+to prevent excessive denoising in simple classes, and (ii)
+a mild diffusion branch (M-Branch) with smoother noise
+scheduling that enables complex classes to more reliably
+preserve their semantic patterns. Together, these branches
+maintain semantic balance during denoising, yielding more
+robust visual-semantic alignment. Extensive experiments
+on standard ZSL benchmarks demonstrate that ZeroDiff++
+achieves state-of-the-art performance, validating the im-
+portance of addressing SDI in diffusion-based ZSL.
+1. Introduction
+Zero-shot learning (ZSL) seeks to classify unseen classes by
+transferring knowledge from seen ones via shared seman-
+tic embeddings [1, 26, 41]. Recently, diffusion-based mod-
+els such as ZeroDiff [47] have advanced this field by intro-
+ducing a denoising diffusion process that solidifies visual-
+semantic correlation through generative regularization and
+supervised contrastive learning.
+While diffusion-based models strengthen vi-
+sual–semantic correlation under limited data, they still
+∗ Corresponding author.
+assume that the reverse diffusion follows a single and fixed
+denoising schedule for all classes. Actually, semantics
+vary greatly in complexity: simple classes like apple or car
+exhibit low semantic diversity, while complex ones like
+tropicbirds are visually and semantically more intricate.
+To understand how diffusion behaves under heterogeneous
+semantic structures, we visualize reverse diffusion trajecto-
+ries of a simple class (blue) and a complex class (red) under
+an identical diffusion schedule (see Fig. 1). Att= 0,1,
+the simple one rapidly contracts into a compact cluster,
+while the complex one remains dispersed. Att= 2,3, the
+simple class exhibits over-diffusion with semantic collapse,
+whereas the complex class remains under-diffused with
+large variance. These observations reveal a structural bias,
+that is, a fixed diffusion schedule cannot accommodate
+diverse semantic complexities. We term this phenomenon
+Semantic Diffusion Imbalance (SDI) 1. To solve SDI, we
+propose to explicitly couple multiple diffusion dynamics
+in a cooperative manner, instead of enforcing a single
+diffusion behavior across all classes.
+To this end, building upon the strong ZeroDiff base-
+line, we develop a three-path denoising diffusion frame-
+work named ZeroDiff++. In this framework, a primary
+path maintains the diffusion behavior of ZeroDiff, while
+two auxiliary branches, i.e., a weak diffusion branch (W-
+Branch) and a mild diffusion branch (M-Branch), are in-
+troduced to achieve semantic balance. The W-Branch uses
+smaller diffusion coefficients to enhance feature discrim-
+inability, while the M-Branch uses a gentler coefficient
+schedule to promote semantic correlation stability. These
+two branches collaborate with the primary path to restore
+semantic equilibrium during denoising, yielding more bal-
+anced and robust feature generation under limited supervi-
+sion. Our main contributions are summarized as follows:
+• To the best of our knowledge, SDI has not been explic-
+itly formalized in diffusion-based ZSL. Prior works on
+diffusion schedules mainly focus on global train-test con-
+sistency rather than class-dependent semantic dynamics.
+• We propose a novel semantic balance principle for
+1A detailed theoretical analysis can be found in Section 4.1. We also
+provide the visual verification experimental design of SDI in Appendix 1.
+This CVPR Findings paper is the Open Access version, provided by the Computer Vision
+Foundation. Except for this watermark, it is identical to the accepted version;
+the final published version of the proceedings is available on IEEE Xplore.
+6997
+
+
+=== PAGE 2 ===
+/uni00000057/uni00000020/uni00000013/uni00000003/uni0000005f/uni00000003/uni00000036/uni0000004c/uni00000050/uni00000053/uni0000004f/uni00000048/uni00000020/uni00000014/uni00000015/uni00000011/uni00000016/uni00000003/uni0000005f/uni00000003/uni00000026/uni00000052/uni00000050/uni00000053/uni0000004f/uni00000048/uni0000005b/uni00000020/uni00000014/uni00000017/uni00000011/uni00000013
+/uni00000057/uni00000020/uni00000014/uni00000003/uni0000005f/uni00000003/uni00000036/uni0000004c/uni00000050/uni00000053/uni0000004f/uni00000048/uni00000020/uni00000014/uni00000015/uni00000011/uni00000018/uni00000003/uni0000005f/uni00000003/uni00000026/uni00000052/uni00000050/uni00000053/uni0000004f/uni00000048/uni0000005b/uni00000020/uni00000014/uni00000018/uni00000011/uni00000015
+/uni00000057/uni00000020/uni00000015/uni00000003/uni0000005f/uni00000003/uni00000036/uni0000004c/uni00000050/uni00000053/uni0000004f/uni00000048/uni00000020/uni00000014/uni00000015/uni00000011/uni00000016/uni00000003/uni0000005f/uni00000003/uni00000026/uni00000052/uni00000050/uni00000053/uni0000004f/uni00000048/uni0000005b/uni00000020/uni00000014/uni00000018/uni00000011/uni00000018
+/uni00000057/uni00000020/uni00000016/uni00000003/uni0000005f/uni00000003/uni00000036/uni0000004c/uni00000050/uni00000053/uni0000004f/uni00000048/uni00000020/uni00000014/uni00000019/uni00000011/uni00000017/uni00000003/uni0000005f/uni00000003/uni00000026/uni00000052/uni00000050/uni00000053/uni0000004f/uni00000048/uni0000005b/uni00000020/uni00000015/uni00000013/uni00000011/uni00000016
+Figure 1. Semantic Diffusion Imbalance (SDI) visualization. Reverse-diffusion feature evolution for semantically simple (blue) and
+complex (red) classes under an identical diffusion schedule. The intra-class scatter gap,∆scatter, increases over diffusion steps, which
+indicates that a fixed schedule induces structural bias: simple classes are over-diffused while complex classes lack sufficient reconstruction.
+diffusion-based ZSL. Instead of enforcing a single de-
+noising trajectory for all classes, we argue that feature
+discriminability and semantic stability should be modeled
+through complementary diffusion behaviors.
+• We instantiate the principle through a novel framework
+ZeroDiff++, which augments ZeroDiff with two se-
+mantically complementary branches, enabling robust vi-
+sual–semantic alignment. Experiments show that ZeroD-
+iff++ achieves state-of-the-art (SOTA) accuracy and vali-
+dates the importance of addressing SDI for reliable ZSL.
+2. Related Work
+2.1. Zero-Shot Learning
+The fundamental idea of ZSL is to align seen and unseen
+classes via auxiliary semantic information. Existing ZSL
+research falls into two main categories: embedding-based
+and generative methods.
+Embedding-based ZSL.Embedding-based methods learn
+a mapping between visual and semantic spaces [12, 16, 34,
+39, 44–46, 52], like Attribute Prototype Network [44] and
+Semantic Contrastive Embedding [16]. In addition, several
+studies have demonstrated that region-level features offer
+stronger discriminative cues than holistic representations [4,
+5, 7, 21, 49]. However, the above methods are trained solely
+on seen classes, and tend to overfit the seen domain and
+degrade significantly when training data are limited [4, 46].
+Generative ZSL.Generative approaches synthesize unseen
+visual features via generative models, thus converting ZSL
+into a supervised learning problem [2, 3, 9, 20, 30, 42].
+This line has achieved strong performance, particularly with
+large diffusion models such as Stable Diffusion [32], which
+can serve as zero-shot classifiers without retraining [27].
+Despite this progress, generative ZSL remains constrained
+by limited data for modeling high-dimensional distributions
+and by reliance on strong semantic conditioning, which to-
+gether limit generalization and lead to unstable feature gen-
+eration. A number of works aim to improve diversity and
+stability of generative models under restricted data. For in-
+stance, hybrid V AE–GAN frameworks [28, 35, 42] attempt
+to mitigate mode collapse, yet their performance remains
+sensitive to reduced training data. Diffusion-based gener-
+ative models [14, 17] provide a more stable alternative by
+learning data distributions through progressive denoising.
+Among these efforts, ZeroDiff [47] represents a partic-
+ularly promising direction. By revisiting supervised con-
+trastive learning [25] and leveraging high intra-class vari-
+ance [22] as fine-grained semantic cues, ZeroDiff inte-
+grates a denoising diffusion with semantic discrimination,
+enabling visual-semantic alignment even under limited su-
+pervision. However, ZeroDiff relies on a single and fixed
+reverse diffusion schedule for all classes, ignoring the fact
+that semantic concepts differ substantially in complexity.
+This gives rise to uneven denoising behavior across classes,
+resulting in imbalanced semantic reconstruction.
+2.2. Generative Models
+Constructing generative models to synthesize additional
+samples has become a reliable strategy for data augmenta-
+tion in low-data regimes [23, 51]. However, training effec-
+tive generative models typically requires abundant labeled
+data, which makes them difficult to deploy in data-scarce
+settings [33, 37]. To alleviate this constraint, recent studies
+have explored data-efficient generative modeling from both
+training and model-design perspectives. From the training
+side, DiffAugment [50] introduces differentiable augmen-
+tation to stabilize training, while AdvAug [8] explores the
+lottery ticket hypothesis to improve data efficiency. From
+the model-design side, PatchDiff [36] adopts patch-wise
+coordinate-conditioned score matching for efficient diffu-
+sion learning, and DDGAN [43] reformulates diffusion with
+a multimodal conditional GAN to enable faster sampling.
+Large-scale text-to-image diffusion models, such as Sta-
+ble Diffusion [32] and DALL-E2 [31], reveal the poten-
+tial of guided imagination for scalable data synthesis. Al-
+though these models can generate labeled samples without
+human annotation, they are trained on vast open-domain
+datasets that naturally include instances of unseen classes.
+6998
+
+
+=== PAGE 3 ===
+Thus, their ZSL behavior arises from broad coverage in-
+stead of strict exclusion of unseen classes. This observa-
+tion motivates researchers to rethink diffusion not as a data-
+generative tool, but as a semantic learner. ZeroDiff embod-
+ies this idea by leveraging diffusion to strengthen visual-
+semantic correlations. However, it adopts a single and fixed
+denoising schedule for all classes, overlooking differences
+in semantic complexity and intra-class variability, introduc-
+ing systematic bias during reverse diffusion.
+3. Preliminaries
+3.1. Problem Setting
+LetY s andY u denote the label sets of seen and unseen
+classes, whereY s ∩Y u =∅. The training dataset is defined
+as:D tr ={(x s, ys,a s)|x s ∈ X s, ys ∈ Y s,a s ∈ A s},
+wherex s denotes a visual sample,y s is its corresponding
+class label, anda s represents the semantic embedding (e.g.,
+attribute or text feature) associated with classy s. Simi-
+larly, the unseen-class dataset is represented as:D te =
+{(xu, yu,a u)|x u ∈ X u, yu ∈ Y u,a u ∈ A u}, where a vi-
+sual samplex u belongs to an unseen class. The goal of ZSL
+is to useD tr to learn a mappingf zsl :X u → Y u, which
+correctly assigns unseen samples to their classes. In the
+generalized ZSL (GZSL) setting, a unified mappingf gzsl
+needs to be learned based onD tr:X s ∪ X u → Y s ∪ Y u.
+3.2. Revisiting ZeroDiff
+ZeroDiff can be mainly divided into two generative mod-
+ules: a diffusion-based representation generator (DRG) and
+a diffusion-based feature generator (DFG), followed by a
+pseudo-classifier trained on synthesized features. ZeroDiff
+learns DRG and DFG through adversarial diffusion objec-
+tives in representation and feature spaces, respectively.
+During DRG training, the representationr s
+0 ofx s is ex-
+tracted by a pretrained representation extractorF ∗
+sc and is
+perturbed by Gaussian noise to producer s
+t andr s
+t−1. Then,
+a generatorRreverses the diffusion process and recon-
+structs clean representation ˜rs
+0 =R(z,a s,r s
+t , t), where
+z∼ N(0, I). Two discriminators,D a andD d, are op-
+timized with lossesL a andL d to enforce semantic-visual
+alignment and diffusion trajectory consistency:
+La =E
+
+Da(rs
+0,a s)
+
+−E
+
+Da(˜rs
+0,a s)
+
+−λ aLga,(1)
+Ld =E
+
+Dd(rs
+t−1,r s
+t ,a s, t)
+
+−E
+
+Dd(ˆrs
+t−1,r s
+t ,a s, t)
+
+−λdLgd,
+(2)
+where ˆrs
+t−1 =αr s
+t−1 + (1−α) ˜rs
+t−1 withα∼U(0,1),
+and ˜rs
+t−1 is the noised counterpart of ˜rs
+0.L ga andL gd are
+gradient penalty terms [13] with respective parametersλ a
+andλ d. The resulting generatorR ∗ can produce pseudo-
+representation.
+During DFG training, a generatorGgenerates clean fea-
+ture ˜vs
+0 =G(z,a s,r s
+0,v s
+t , t)while discriminatorsD ′
+a,D ′
+d,
+andD r jointly ensure feature realism, temporal coherence,
+and semantic fidelity. Note thatv s
+t is the noised counterpart
+of clean featurev s
+0 ofx s extracted by a pretrained feature
+extractorF ∗
+ce. The involved losses are:
+L′
+a =E
+
+D′
+a(vs
+0,a s)
+
+−E
+
+D′
+a(˜vs
+0,a s)
+
+−λ ′
+aL′
+ga,(3)
+L′
+d =E
+
+D′
+d(vs
+t−1,v s
+t ,r s
+0,a s, t)
+
+−E
+
+D′
+d(ˆvs
+t−1,v s
+t ,r s
+0,a s, t)
+
+−λ ′
+dL′
+gd, (4)
+Lr =E
+
+Dr(vs
+0,r s)
+
+−E
+
+Dr(˜vs
+0,r s)
+
+−λ rLgr,(5)
+where ˆvs
+t−1 =αv s
+t−1 + (1−α) ˜vs
+t−1;v s
+t−1 and ˜vs
+t−1 are
+noised counterparts ofv s
+0 and ˜vs
+0, respectively.L ′
+ga,L ′
+gd,
+andL gr are gradient penalty terms with respectiveλ ′
+a,λ ′
+d,
+andλ r. Meanwhile, the Wasserstein-distance-based dis-
+tillation loss (W-distillation loss), denoted asL mu, is de-
+signed for mutual learning of discriminators. The resulting
+R∗ andG ∗ can extract representations and features of un-
+seen samples to train linear classifiers for ZSL and GZSL
+tests.
+4. Methodology
+4.1. Semantic Diffusion Imbalance
+Let a forward diffusion be parameterized by a variance
+schedule{β t}T
+t=1 withα t = 1−β t and¯αt = Qt
+i=1 αi.
+Given a clean visual featurev 0, the diffusion process is:
+qβ(vt|v0) =N
+√¯αt v0,(1−¯α t)I
+
+(6)
+We denotep(v0|c)as class-conditional density of clean fea-
+tures for classc, which is reflected by intra-class covariance:
+p(v0|c) =N(µ c,Σ c). Thus, the marginal at steptis:
+qc
+β(vt)≜
+Z
+qβ(vt |v 0)p(v 0 |c)dv 0
+=N
+√¯αt µc,¯αt Σc + (1−¯αt)I
+ (7)
+whereq c
+β(vt)is Gaussian with covarianceΣ c
+t = ¯αtΣc +
+(1−¯αt)I. By the closed form of the differential entropy of
+a Gaussian [11], we obtain:
+Hc
+β(t) = 1
+2 logdet(Σc
+t) + d
+2 log(2πe)
+= 1
+2 logdet
+
+¯αtΣc + (1−¯αt)I
+
++ d
+2 log(2πe)
+(8)
+whereddenotes feature dimensionality. To distinguish se-
+mantic granularity, we letc s andc c denote simple and com-
+plex classes, respectively. Complex classes typically ex-
+hibit larger intra-class dispersion, so their covariances sat-
+isfyΣ cs ≺Σ cc, where≺denotes the Loewner order 2.
+Sincelogdet(·)is monotone with respect to the Loewner or-
+der for positive definite matrices, we have:logdet
+
+¯αtΣcs +
+2A≺BholdsiffB−Ais positive semidefinite (PSD).
+6999
+
+
+=== PAGE 4 ===
+(1−¯αt)I
+
+<logdet
+
+¯αtΣcc + (1−¯αt)I
+
+. Applying this to
+Eq. (8) yields:
+Hcs
+β (t)<H cc
+β (t),∀¯α t ∈(0,1)(9)
+which establishes the diffusion entropy gap across classes
+with different semantic complexity.
+Eq. (9) shows that complex classes exhibit larger diffu-
+sion entropy under the same noise level, but it remains un-
+clear how this entropy disparity interacts with a fixed diffu-
+sion schedule during sampling. Although{β t}T
+t=1 induces
+the same nominal signal-to-noise ratio (SNR) factor ¯αt
+1−¯αt
+across all classes, the effective denoising difficulty remains
+class-dependent due to differences in intrinsic intra-class
+variancesΣ c. To characterize this effect, we use the fol-
+lowing class-dependent effective posterior SNR proxy:
+SNRc
+t ∝ ¯αt
+(1−¯αt) tr(Σc) ,(10)
+wheretr(Σ c)denotes the trace of the covariance matrix,
+i.e., the total intra-class variance. Eq. (10) indicates that, un-
+der a fixed diffusion schedule, the effective posterior SNR
+is inversely related to the intra-class variance. Therefore,
+simple classes with smallertr(Σ c)tend to exhibit higher
+posterior SNR, making the reverse process prone to over-
+denoising and feature collapse, whereas complex classes
+with largertr(Σ c)yield lower posterior SNR, leading to
+under-denoising and insufficient semantic disentanglement.
+Together with Eq. (9), this reveals that intra-class dispersion
+governs both diffusion entropy and denoising behavior, giv-
+ing rise to Semantic Diffusion Imbalance (SDI).
+4.2. ZeroDiff++
+To address SDI, we propose ZeroDiff++, an enhanced diffu-
+sion framework that rethinks the denoising dynamics from
+a semantic equilibrium perspective. Instead of one diffu-
+sion trajectory, ZeroDiff++ decomposes the generative pro-
+cess into three coordinated paths: a primary path preserv-
+ing the ZeroDiff behavior, and two complementary auxil-
+iary branches, W-Branch and M-Branch, to restore seman-
+tic equilibrium during denoising. We first introduce core
+innovations of ZeroDiff++ and then describe the overview.
+4.2.1. Core Innovations
+W-Branch: Preserving Fine-Grained Semantic Details.
+To mitigate the over-diffusion experienced by semantically
+simple classes under a standard noise schedule, ZeroDiff++
+introduces the W-Branch that uses a scaled variance sched-
+uleβ w
+t =κβ b
+t with¯αw
+t =Qt
+i=1(1−β w
+i ), where0< κ <1
+andβ b
+t is the baseline ZeroDiff schedule. This weaker dif-
+fusion injects less noise at each step, thereby preventing ex-
+cessive feature smoothing and helping retain fine-grained
+structural and semantic cues that would otherwise be sup-
+pressed in the reverse denoising process. Formally, letR w
+andG w be representation and feature generators:
+˜rs,w
+0 =R w(z,a s,r s,w
+t , t;β w
+1:t),(11)
+˜vs,w
+0 =G w(z,a s,r s
+0,v s,w
+t , t;β w
+1:t),(12)
+wherer s,w
+t andv s,w
+t denote the noised representation and
+feature at steptin the W-Branch.R w andG w are jointly
+used to train DRG and DFG with the alignment losses
+Law,r andLa w,f , defined according to Eq. (1) and Eq. (3),
+together with the W-distillation lossL w
+mu
+3.
+Intuitively, weak diffusion preserves a larger portion of
+the original signal, i.e.,¯αw
+t >¯αt, and injects less noise at
+each step. As a result, the reverse process starts from less
+corrupted features and requires a less aggressive denoising
+trajectory, which helps alleviate over-smoothing and pre-
+serve fine-grained intra-class variability. This is particularly
+beneficial for simple classes, whose compact distributions
+are more vulnerable to feature collapse under a standard
+schedule. Consequently, the W-Branch acts as a semantic
+magnifier by maintaining distinctive structural and semantic
+details that would otherwise be erased, thereby improving
+recognition of simple classes prone to excessive denoising.
+Note that Eq. (5) is omitted in the W-Branch, as it conflicts
+with the branch objective and degrades performance. More
+analysis is shown in Sec. 5.4.
+M-Branch: Stabilizing Denoising Dynamics.Complex
+classes with large intrinsic variance often suffer from under-
+denoising under a standard schedule, as their lower SNR
+makes reverse sampling more sensitive to noise fluctua-
+tions. A straightforward solution is to increase the diffu-
+sion strength, but injecting strong noise will destroy high-
+variance semantic structure and amplifies score instability,
+leading to irreversible information loss. Instead of increas-
+ing noise, the M-Branch stabilizes the generative trajectory
+by adopting a gentle, uniformly distributed variance sched-
+uleβ m
+t =F(β m
+min, βm
+max)with¯α m
+t = Qt
+i=1(1−β m
+i ),
+whereβ m
+min andβ m
+max are minimum and maximum noise
+levels of the M-branch;F(·)is a linear interpolation func-
+tion. This mild schedule reduces abrupt changes in SNR
+across timesteps, yielding smoother reverse dynamics and
+allowing complex classes to more reliably preserve and re-
+cover their diverse semantic patterns. The representation
+and feature generators, denoted asR m andG m, perform
+the respective reverse processes as:
+˜rs,m
+0 =R m(z,a s,r s,m
+t , t;β m
+1:t),(13)
+˜vs,m
+0 =G m(z,a s,r s
+0,v s,m
+t , t;β m
+1:t).(14)
+wherer s,m
+t andv s,m
+t denote the noised representation and
+feature at steptin the M-Branch.R m andG m are applied to
+train DRG and DFG with the trajectory-consistency losses
+3The calculation details ofL w
+mu andL m
+mu are shown in Appendix 2.
+7000
+
+
+=== PAGE 5 ===
+Lm,r
+d andL m,f
+d , defined according to Eq. (2) and Eq. (4),
+together with the W-distillation lossL m
+mu3.
+Intuitively, a mild variance scheduleβ m
+t reduces abrupt
+changes in noise level across diffusion steps. Asβ m
+t varies
+more smoothly overt, the corresponding reverse condition-
+als are expected to change more gradually, which stabi-
+lizes the reverse trajectory and makes it less sensitive to
+noise-level transitions. Such stability is especially bene-
+ficial for complex classes, whose large intra-class covari-
+ance requires semantic structure to be accumulated progres-
+sively over timesteps. Under a standard schedule, abrupt
+changes inβ t may destabilize score estimation, causing
+high-order semantic patterns to degrade before being fully
+reconstructed. In contrast, a mild schedule promotes more
+consistent semantic propagation, allowing complex varia-
+tions to be gradually recovered. Thus, the M-Branch allevi-
+ates under-denoising of complex classes while maintaining
+coherent semantic alignment.
+Semantic-Guided Denoising Fusion.ZeroDiff++ also im-
+plements semantic-guided denoising fusion (SGDF) to self-
+calibrate denoised features after each denoising step during
+DFG training. First, we introduce stochastic reverse pertur-
+bations to generate branch-specificKdenoised features:
+˜vs,l
+0,k =G b
+
+zk,a s,r s
+0,v s
+t , t;β l
+1:t
+
+, l∈ {b, w, m},(15)
+wherez k ∼ N(0, I)introduces thekth stochastic noise.
+Then, a semantic prototypePis obtained by projecting se-
+mantic embeddinga s into the visual space. We compute
+cosine similarities betweenPand each candidate ˜vs,l
+0,k, and
+normalize them via a softmax attention:
+ωl
+k =
+exp(cos(˜vs,l
+0,k,P)/τ)
+PK
+j=1 exp(cos(˜vs,l
+0,j,P)/τ)
+, l∈ {b, w, m},(16)
+whereτis a temperature parameter. After obtainingω l
+k,
+all candidates are fused to form final visual feature: ¯vs,l
+0 =PK
+k=1 ωl
+k ˜vs,l
+0,k, which is re-noised for subsequent loss cal-
+culation and optimization.
+SGDF benefits ZeroDiff++ in two aspects. First,K-
+sample stochastic denoising increases intra-branch diversity
+and mitigates degeneration, leading to more robust feature
+synthesis. Second, semantic-weighted fusion calibrates de-
+noised candidates toward prototype-consistent directions,
+improving semantic coherence without introducing addi-
+tional training objectives. By coupling denoising dynamics
+with lightweight semantic guidance, SGDF achieves more
+balanced and reliable feature generation.
+Remark and Distinction to ZeroDiff.ZeroDiff++ re-
+tains loss formulations of ZeroDiff but rethinks its de-
+noising dynamics in response to SDI. Whereas ZeroDiff
+adopts a single reverse trajectory with uniform denoising
+strength across classes, ZeroDiff++ introduces two comple-
+mentary paths with distinct schedulesβ w
+t andβ m
+t . These
+Algorithm 1 Generator Training of ZeroDiff++
+Input:D tr ={(x s, ys,a s)},F ∗
+sc,F ∗
+ce,R,R w,R m,G,
+Gw,G m,D a,D d,D ′
+a,D ′
+d,D r; generator iterationsN g,
+discriminator iterationsN dis,K,P.
+[Training DRG]
+InitializeR,R w,R m,D a, andD d.
+forN g do
+Select a batch(x s, ys,a s)fromD tr;r s
+0 ←F ∗
+sc(xs).
+forN dis do
+Execute three-branch forward noising, obtaining
+rs
+t−1,r s
+t ,r s,w
+t ,r s,m
+t−1,r s,m
+t .
+Generate ˜rs
+0, ˜rs,w
+0 and ˜rs,m
+0 byR,R w (Eq. (11)) and
+Rm (Eq. (13)).
+Renoise ˜rs
+0 and ˜rs,m
+0 to ˜rs
+t−1 and ˜rs,m
+t−1.
+ObtainL a,L w,r
+a by Eq. (1) andLd,L m,r
+d by Eq. (2).
+UpdateD a, Dd by minimizingL a,L w,r
+a ,L d,L m,r
+d .
+end for
+UpdateR, R w by maxmizingL a,L w,r
+a ,L d,L m,r
+d .
+end for
+FreezeRasR ∗.
+[Training DFG]
+InitializeG,G w,G m,D ′
+a,D ′
+d, andD r.
+forN g do
+Select a batch(x s, ys,a s)fromD tr;r s
+0 ←F ∗
+sc(xs)and
+vs
+0 ←F ∗
+ce(xs).
+forN dis do
+Execute three-path forward noising and obtain
+vs
+t−1,v s
+t ,v s,w
+t ,v s,m
+t−1,v s,m
+t .
+GenerateKdenoising candidates byG,G w (Eq.
+(12)),G m (Eq. (14)) respectively.
+Compute weights usingPand denoised candidates
+by Eq. (16), and perform weighted fusion on all de-
+noised candidates, thus obtaining ¯vs
+0, ¯vs,w
+0 and ¯vs,m
+0 .
+Renoise ¯vs
+0 and ¯vs,m
+0 to ¯vs
+t−1 and ¯vs,m
+t−1.
+GetL ′
+a,L w,f
+a by Eq. (3) andL ′
+d,L m,f
+d by Eq. (4).
+GetL r by Eq. (5).
+UpdateD ′
+a, D′
+d, Dr by minimizingL ′
+a,L w,f
+a ,L ′
+d,
+Lm,f
+d ,L r,L l
+mu,l∈ {b, w, m}
+end for
+UpdateG, G w, Gm by maximizingL ′
+a,L w,f
+a ,L ′
+d,
+Lm,f
+d ,L r.
+end for
+FreezeGasG ∗.
+Output:FrozenR ∗, G∗.
+branches explicitly decouple feature/representation recon-
+struction into discriminability-preserving and stability-
+enhancing processes, allowing simple and complex classes
+to be denoised in a more suitable regime. Furthermore,
+7001
+
+
+=== PAGE 6 ===
+SGDF introduces a lightweight semantic self-calibration
+mechanism that refines reverse predictions without adding
+new objectives.
+4.2.2. Overview
+During training, ZeroDiff++ augments the original ZeroDiff
+with two auxiliary W- and M-branches and the SGDF mod-
+ule. The W-branch employs weak diffusion to enhance fea-
+ture discriminability, whereas the M-branch adopts a mild
+schedule to stabilize semantic evolution. SGDF further re-
+fines denoised features at each step and improves seman-
+tic–visual alignment. Finally, two generatorsR ∗ andG ∗
+can be obtained. We summarize the training pipeline of Ze-
+roDiff++ in Algorithm 1. At reference time, ZeroDiff++
+employsR ∗ andG ∗ to synthesize pseudo representations
+and features for unseen classes and subsequently trains a
+lightweight classifier for zero-shot recognition.
+5. Experiments
+5.1. Experimental Details
+Datasets.We evaluate ZeroDiff++ on three stan-
+dard ZSL/GZSL benchmarks: two fine-grained datasets
+AW A2 [41] and CUB [38], and a coarse-grained dataset
+SUN [29]. AW A2 contains 37322 images from 65 animal
+categories; CUB includes 11788 images of 200 bird species
+and SUN consists of 14340 images from 717 scene cate-
+gories. For fair comparison, we follow ZeroDiff [47] with
+the same class splits and semantic attributes. The per-class
+Top-1 accuracy (T1) is evaluated for ZSL and GZSL. Mean-
+while, we report the harmonic mean H between seen (S) and
+unseen (U) classes (i.e.,H= 2×S×U
+S+U ) for GZSL.
+Implementation Details.We adoptF ∗
+sc,F ∗
+ce, and settings
+of the primary ZeroDiff from [47]. In DRG, we setκ= 0.8,
+βm
+min = 0.1β b
+min, andβ m
+max = 0.01β b
+max.β b
+min andβ b
+max
+are minimum and maximum noise levels of the primary Ze-
+roDiff. Loss weights of W- and M- branches are 0.1 and
+1.0, respectively. Parameters of all gradient penalty terms
+are 1.0. In DFG, both branches have a weight of 0.5 and
+their gradient penalty term parameters are 1.0. In SGDF,K
+is 5 andτis 0.1. We use Adam with learning rate5×10 −4,
+batch size 64, and 300 epochs. We performT= 4diffusion
+steps. At reference time, we synthesize pseudo-features per
+unseen class: 12000 for AW A2, 800 for CUB, and 1000 for
+SUN, in ZSL/GZSL tasks. All experiments are conducted
+on a single NVIDIA A800 GPU.
+5.2. Comparison with SOTA Methods.
+Table 1 compares ZeroDiff++ with recent SOTA methods
+across three benchmark datasets. For ZSL, ZeroDiff++
+achieves the best T1, i.e., 87.5% and 78.0%, on AW A2 and
+SUN respectively, showing strong visual-semantic align-
+ment. For GZSL, it also attains the highestH, i.e., 81.0%
+0 50 100 150 200 250 300
+Epoch
+0.0
+0.1
+0.2
+0.3
+0.4¢adv
+100% Training Set
+ZeroDiff++
+ZeroDiff
+0 50 100 150 200 250 300
+Epoch
+0.0
+0.5
+1.0
+1.5¢adv
+30% Training Set
+ZeroDiff++
+ZeroDiff
+0 50 100 150 200 250 300
+Epoch
+0
+1
+2
+3¢adv
+10% Training Set
+ZeroDiff++
+ZeroDiff
+Figure 2. Analysis of∆ adv =D ′
+d(vs
+0,a s)−D ′
+d(vte,s
+0 ,a te,s)for
+ZeroDiff and ZeroDiff++ on AW A2. A larger∆adv indicates that
+D′
+d perceives real testing seen examples as more fake.
+and 60.2% on these two datasets, surpassing the SOTA Ze-
+roDiff and V ADS. On CUB, ZeroDiff++’s performance is
+slightly lower than V ADS and DML, but is still improves
+upon ZeroDiff, increasingHfrom 69.4% to 71.1%. These
+results suggest that the multi-path diffusion design comple-
+ments existing diffusion models and enhances their gener-
+alization ability in complex semantic domains.
+5.3. ZeroDiff++ vs. ZeroDiff
+To comprehensively evaluate the superiority of ZeroDiff++,
+we conduct a dedicated comparison with ZeroDiff.
+Performance Under Limited Training Data.Table 2
+summarizes the ZSL/GZSL performance of ZeroDiff and
+ZeroDiff++ on AW A2 under both 30% and 10% training
+splits. It shows that ZeroDiff++ consistently outperforms
+ZeroDiff across both splits in both T1 and H, confirming
+that the proposed dual-path design enhances generalization
+and effectively alleviates semantic-visual discrepancy even
+when limited supervision is available.
+Adversarial Discrepancy Evolution.To further investi-
+gate the training dynamics, Fig. 2 plots the evolution of∆adv
+over training epochs, where a largerD adv indicates thatD ′
+d
+is more inclined to treat real seen samples as fake, reflect-
+ing stronger visual-semantic bias. ZeroDiff exhibits a rapid
+and sustained increase of∆ adv, suggesting adversarial drift
+and accumulation of biased alignment. In contrast, ZeroD-
+iff++ grows significantly slower, validating that the auxil-
+iary diffusion pathways successfully suppress harmful drift
+and yield a more reliable semantic-visual interaction.
+Robustness to Noisy Visual-Semantic Inputs.We inject
+zero-mean Gaussian noise with standard deviationσ=
+0.05for visual features andσ= 0.02for semantic repre-
+sentations, respectively. As shown in line 5 of Table 2, Ze-
+roDiff++ consistently outperforms ZeroDiff under all noisy
+conditions, demonstrating stronger robustness and stability
+against feature corruption.
+Computational overhead.Although ZeroDiff++ intro-
+duces an additional diffusion path, the resulting increase in
+per-generation computation is moderate (e.g., about +5s on
+AW A2; see Table 2). In practice, this overhead is accept-
+able for most ZSL scenarios, especially given the method’s
+7002
+
+
+=== PAGE 7 ===
+Table 1. Comparisons with SOTA methods. U/S, and H denote Top-1 accuracy (%) on unseen/seen classes and harmonic mean (%).
+Method Venue ZSL GZSL Avg.
+AW A2 CUB SUN AW A2 CUB SUN
+T1 T1 T1 U S H U S H U S H
+f-CLSWGAN [40] CVPR18 68.2 57.3 60.8 57.9 61.4 59.6 43.7 57.7 49.7 42.6 36.6 39.4 53.0
+f-V AEGAN [42] CVPR19 70.3 72.9 65.6 57.1 76.1 65.2 63.2 75.6 68.9 50.1 37.8 43.1 63.0
+TFV AEGAN [28] ECCV20 73.4 74.3 66.7 55.5 83.6 66.7 63.8 79.3 70.7 41.8 51.9 46.3 65.7
+SDV AE [10] ICCV21 69.3 78.5 77.0 69.6 78.2 73.7 73.0 77.5 75.1 62.3 52.6 59.8 71.1
+CE-GZSL [15] CVPR21 72.8 84.6 77.7 65.3 73.4 69.1 63.9 66.8 65.3 48.8 38.6 43.1 65.5
+DSP [6] ICML23 – – – 63.7 82.3 71.3 62.5 73.1 67.4 45.7 49.8 47.7 63.4
+DML [48] ACCV24 – – – 62.2 82.2 70.9 57.181.667.2 39.6 52.7 45.9 62.1
+V ADS [18] CVPR24 82.586.876.3 73.4 83.6 79.374.174.6 74.3 64.2 49.0 49.8 73.6
+VSPCN [24] CVPR25 76.6 80.6 75.3 71.8 84.3 77.6 72.8 78.975.759.4 49.1 53.8 72.1
+ZeroMamba [19] AAAI25 71.9 80.0 72.4 67.9 87.6 76.5 72.1 76.4 74.2 56.5 41.4 47.7 69.0
+ZeroDiff [47] ICLR25 86.5 75.2 76.7 70.5 87.5 78.1 63.1 77.1 69.4 58.4 55.1 57.7 73.3
+ZeroDiff++ Ours 87.575.878.0 74.6 88.7 81.068.8 73.7 71.164.5 56.5 60.2 76.1
+Table 2. ZeroDiff vs. ZeroDiff++ on AW A2.∆(↑) indicates per-
+formance improvement;∆T denotes extra training per epoch [s].
+Setting ZeroDiff ZeroDiff++∆(↑) TZ TZ++
+T1 H T1 H T1 H
+30%D tr 84.0 80.284.9 81.0+0.9 +0.8 47 54
+10%D tr 83.3 74.087.4 77.3+4.1 +3.3 16 18
+Noisy Input 85.0 75.086.0 77.0+1.0 +2.0 165 174
+Avg.∆Time [s/epoch]∼5
+(a) ZeroDiff++
+ (b) ZeroDiff
+Figure 3. t-SNE visualization of synthesized unseen-class rep-
+resentations on AW A2. ZeroDiff++ exhibits more coherent and
+evenly separated clusters, highlighting the mitigation of SDI.
+improved stability under varying semantic complexity.
+Feature Embedding Visualization.Figure 3 shows t-
+SNE visualization of synthesized representations for unseen
+classes generated by ZeroDiff and ZeroDiff++ on AW A2.
+Although the feature clusters of ZeroDiff appear more com-
+pact, this may reflect over-compression caused by a fixed
+diffusion schedule, that it, simple classes collapse into sin-
+gle modes, while complex classes remain entangled. In
+contrast, ZeroDiff++ yields moderately compact yet clearly
+separated clusters, indicating more balanced denoising and
+alleviation of SDI.
+Table 3. Ablation study of two branches and SGDF on AW A2.
+Variant ZSL GZSL
+T1 U S H
+w/o W-branch 83.2 73.8 83.4 78.3
+w/o M-branch 80.4 69.1 87.7 77.3
+w/o SGDF 85.5 72.6 85.9 78.7
+W-branch w/ additional Eq.(5) 84.9 69.8 87.5 77.6
+Swap branch functions 83.1 71.6 89.7 79.7
+Share both functions 85.1 69.8 88.8 78.1
+Full model (Ours) 87.5 74.6 88.7 81.0
+5.4. Ablation Study
+Two Branches and SGDF .We perform a serious of ab-
+lation analyses of two branches and SGDF on AW A2, in-
+cluding: a) removing one of the two branches; b) removing
+SGDF; c) adding fine-grained semantic adversarial regular-
+ization (Eq. (5)) to the W-branch; d) swapping functions of
+the two branches, i.e., using the W-Branch for trajectory-
+consistency and the M-Branch for semantic-visual align-
+ment; e) letting both branches jointly optimize trajectory-
+consistency and alignment.
+Table 3 reports ZSL and GZSL results. First, remov-
+ing either branch leads to a clear degradation in ZSL T1
+(from 87.5% to 83.2% or 80.4%), indicating that both
+branches are indispensable and provide complementary
+benefits. Second, removing SGDF reduces T1 from 87.5%
+to 85.5% and decreases H from 81.0% to 78.7%. This
+degradation suggests that SGDF plays a crucial role in sta-
+bilizing multi-branch denoising. For “W-branch w/ addi-
+tional Eq.(5)”, we find that adding fine-grained adversarial
+regularization into the W-Branch decreases T1/H/U. This
+is because the W-branch is designed to preserve compact
+representations through weak perturbation, whereas Eq. (5)
+7003
+
+
+=== PAGE 8 ===
+Table 4. Comparison of different fusion types and weights for
+combining weak and mild branches on AW A2.{γ w
+1 , γm
+2 }and
+{γw
+1 , γm
+2 }represent the weights of the losses obtained from the
+two branches during training DRG and DFG, respectively.
+Fusion Type and Weight ZSL GZSL
+T1 U S H
+Temperature Gating 79.3 71.6 83.5 77.0
+Semantic Gating 80.5 71.4 84.0 77.2
+Fixed Weight Fusion87.5 74.6 88.7 81.0
+{0.5, 0.5}and{0.5, 0.5}86.9 74.2 87.8 80.2
+{0.5, 0.5}and{0.1, 1.0}86.7 73.9 87.2 80.3
+{0.1, 1.0}and{0.5, 0.5}87.5 74.6 88.7 81.0
+enforces aggressive class separation, resulting in conflicting
+optimization objectives. Moreover, exchanging the func-
+tions of the two branches results in further drops (e.g.,
+T1 from 87.5% to 83.1%), confirming that the W-branch
+is better suited for alignment while the M-branch stabi-
+lizes diffusion trajectory modeling. Furthermore, allow-
+ing both branches to simultaneously perform both functions
+also harms performance, likely due to optimization conflict.
+Overall, these results validate that the proposed asymmetric
+dual-path design and SGDF is well-structured for achieving
+strong ZSL/GZSL performance.
+Dual-Branch Fusion.We introduce two ways to combine
+losses of the W- and M- branches, i.e., temperature-based
+soft gating and semantic gating, for comparing with our
+fixed-weight fusion. The former adaptively adjusts branch
+weights using a temperature parameter; the latter predicts
+sample-wise fusion weights from class semantic embed-
+dings. As shown in Table 4, fixed-weight fusion achieves
+the best performance across both ZSL and GZSL, outper-
+forming temperature gating by 8.2% and 4.0%, and se-
+mantic gating by 7.0% and 3.8% on T1 and H, respec-
+tively. These results indicate that although adaptive weight-
+ing mechanisms introduce flexibility, they suffer from un-
+stable interactions between branches and unreliable sample-
+wise predictions under limited supervision. In contrast,
+fixed-weight fusion provides a stable optimization signal
+and encourages complementary behavior between the two
+branches, yielding superior overall performance.
+Moreover, we evaluate multiple fixed-weight configura-
+tions during DRG and DFG training, and find that{0.1,
+1.0}and{0.5, 0.5}perform the best. This configuration
+allows DRG to emphasize the structurally stable guidance
+from the M-branch while still benefiting from the fine-
+grained cues provided by the W-Branch. In contrast, train-
+ing DFG favors a balanced weighting as feature-level gener-
+ation benefits from jointly enforcing both low-noise preser-
+vation and smooth semantic propagation. This weighting
+scheme effectively preserves the complementary roles of
+the two branches, leading to the best overall performance.
+Table 5. Effect ofκand smoothness hyperparameters. Note that
+βm
+min =ρ 1βb
+min andβ m
+max =ρ 2βb
+max.
+κ ρ 1, ρ2
+ZSL GZSL
+T1 U S H
+0.6 0.1, 0.05 85.6 72.6 84.7 78.2
+0.8 0.1, 0.02 85.7 74.5 84.8 79.4
+0.8 0.1, 0.0187.5 74.6 88.7 81.0
+1.0 0.3, 0.02 85.7 74.7 84.9 79.4
+Table 6. Effect of VaringKfor SGDF on AW A2.
+K ZSL GZSL
+T1 U S H
+1 83.6 67.7 85.9 76.5
+3 85.5 72.6 88.0 78.7
+587.5 74.6 88.7 81.0
+8 86.1 74.0 88.1 79.5
+5.5. Hyperparameter Analysis
+κand Smoothness Hyperparameters on A W A2.We in-
+vestigate how hyperparameters of two branches affect Ze-
+roDiff++ (see Table 5). Decreasingκwill reduce stochas-
+tic perturbation in the W-branch. Whenκ= 0.8and the
+smoothness hyperparameters are{0.1β b
+min,0.01β b
+max}, Ze-
+roDiff++ reaches its best performance. However, when
+smoothness is weakened to{0.3β b
+min,0.02β b
+max}, the per-
+formance slightly drops. These observations confirm that
+the complementary balance between weak stochastic en-
+hancement and mild trajectory smoothing is crucial for
+maximizing ZeroDiff++ performance.
+Kin SGDF .We vary the value ofKused for candidate
+feature generation to analyze the role of SGDF, as shown in
+Table 6. An increasingKfrom 1 to 5 yields notable perfor-
+mance gains, especially for U and H, confirming that richer
+stochastic exploration helps avoid degeneration and leads to
+more robust pseudo-denoising. However, further increasing
+Kto 8 leads to slight performance decrease, likely due to
+noise accumulation and diluted attention over less informa-
+tive samples.
+6. Conclusion
+In this work, we identify SDI as a previously overlooked
+limitation of diffusion-based ZSL, where a fixed noise
+schedule leads to uneven semantic preservation across
+classes. To address this issue, we propose ZeroDiff++, a
+three-path diffusion framework, to explicitly balance se-
+mantic dynamics. By integrating the W-Branch to avoid
+over-denoising and the M-Branch to enhance semantic re-
+coverability, ZeroDiff++ achieves stable and discriminative
+visual–semantic alignment. Extensive experiments across
+multiple ZSL/GZSL benchmarks demonstrate that ZeroD-
+iff++ consistently outperforms existing SOTA methods.
+7004
+
+
+=== PAGE 9 ===
+Acknowledgments
+This work is supported in part by National Natural
+Science Foundation of China (62506126, 62376092),
+Open Project of Xiangjiang Laboratory (25XJ03026),
+Natural Science Foundation of Hunan Province
+(2025JJ60384), Research Foundation of Educa-
+tion Bureau of Hunan Province (24B0584), Chang-
+sha Natural Science Foundation (kq2502253), Hu-
+nan Provincial Social Science Foundation Project
+(24JL018).
+References
+[1] Sarkhan Badirli, Zeynep Akata, George Mohler, Christine
+Picard, and Mehmet M Dundar. Fine-grained zero-shot
+learning with dna as side information.Advances in Neural
+Information Processing Systems, 34:19352–19362, 2021. 1
+[2] Samet Cetin. Closed-form sample probing for training gen-
+erative models in zero-shot learning. Master’s thesis, Middle
+East Technical University (Turkey), 2022. 2
+[3] Shiming Chen, Wenjie Wang, Beihao Xia, Qinmu Peng,
+Xinge You, Feng Zheng, and Ling Shao. Free: Feature re-
+finement for generalized zero-shot learning. InProceedings
+of the IEEE/CVF international conference on computer vi-
+sion, pages 122–131, 2021. 2
+[4] Shiming Chen, Ziming Hong, Yang Liu, Guo-Sen Xie,
+Baigui Sun, Hao Li, Qinmu Peng, Ke Lu, and Xinge You.
+Transzero: Attribute-guided transformer for zero-shot learn-
+ing. InProceedings of the AAAI conference on artificial in-
+telligence, pages 330–338, 2022. 2
+[5] Shiming Chen, Ziming Hong, Guo-Sen Xie, Wenhan Yang,
+Qinmu Peng, Kai Wang, Jian Zhao, and Xinge You. Msdn:
+Mutually semantic distillation network for zero-shot learn-
+ing. InProceedings of the IEEE/CVF conference on com-
+puter vision and pattern recognition, pages 7612–7621,
+2022. 2
+[6] Shiming Chen, Wenjin Hou, Ziming Hong, Xiaohan Ding,
+Yibing Song, Xinge You, Tongliang Liu, and Kun Zhang.
+Evolving semantic prototype improves generative zero-shot
+learning. InInternational Conference on Machine Learning,
+pages 4611–4622. PMLR, 2023. 7
+[7] Shiming Chen, Wenjin Hou, Salman Khan, and Fahad Shah-
+baz Khan. Progressive semantic-guided vision transformer
+for zero-shot learning. InProceedings of the IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition, pages
+23964–23974, 2024. 2
+[8] Tianlong Chen, Yu Cheng, Zhe Gan, Jingjing Liu, and
+Zhangyang Wang. Data-efficient gan training beyond (just)
+augmentations: A lottery ticket perspective.Advances in
+Neural Information Processing Systems, 34:20941–20955,
+2021. 2
+[9] Zhi Chen, Sen Wang, Jingjing Li, and Zi Huang. Rethink-
+ing generative zero-shot learning: An ensemble learning per-
+spective for recognising visual patches. InProceedings of
+the 28th ACM international conference on multimedia, pages
+3413–3421, 2020. 2
+[10] Zhi Chen, Yadan Luo, Ruihong Qiu, Sen Wang, Zi Huang,
+Jingjing Li, and Zheng Zhang. Semantics disentangling
+for generalized zero-shot learning. InProceedings of the
+IEEE/CVF international conference on computer vision,
+pages 8712–8720, 2021. 7
+[11] Thomas M. Cover and Joy A. Thomas.Elements of Informa-
+tion Theory (Wiley Series in Telecommunications and Signal
+Processing). Wiley-Interscience, USA, 2006. 3
+[12] Zhengming Ding, Ming Shao, and Yun Fu. Low-rank em-
+bedded ensemble semantic dictionary for zero-shot learning.
+InProceedings of the IEEE conference on computer vision
+and pattern recognition, pages 2050–2058, 2017. 2
+[13] Ishaan Gulrajani, Faruk Ahmed, Martin Arjovsky, Vincent
+Dumoulin, and Aaron C Courville. Improved training of
+wasserstein gans.Advances in neural information processing
+systems, 30, 2017. 3
+[14] Evans Xu Han, Linghao Jin, Xiaofeng Liu, and Paul Pu
+Liang. Progressive compositionality in text-to-image gen-
+erative models.arXiv preprint arXiv:2410.16719, 2024. 2
+[15] Zongyan Han, Zhenyong Fu, Shuo Chen, and Jian Yang.
+Contrastive embedding for generalized zero-shot learning. In
+Proceedings of the IEEE/CVF conference on computer vi-
+sion and pattern recognition, pages 2371–2381, 2021. 7
+[16] Zongyan Han, Zhenyong Fu, Shuo Chen, and Jian Yang.
+Semantic contrastive embedding for generalized zero-shot
+learning.International Journal of Computer Vision, 130(11):
+2606–2622, 2022. 2
+[17] Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising dif-
+fusion probabilistic models.Advances in neural information
+processing systems, 33:6840–6851, 2020. 2
+[18] Wenjin Hou, Shiming Chen, Shuhuang Chen, Ziming Hong,
+Yan Wang, Xuetao Feng, Salman Khan, Fahad Shahbaz
+Khan, and Xinge You. Visual-augmented dynamic semantic
+prototype for generative zero-shot learning. InProceedings
+of the IEEE/CVF conference on computer vision and pattern
+recognition, pages 23627–23637, 2024. 7
+[19] Wenjin Hou, Dingjie Fu, Kun Li, Shiming Chen, Hehe
+Fan, and Yi Yang. Zeromamba: Exploring visual state
+space model for zero-shot learning. InProceedings of the
+AAAI Conference on Artificial Intelligence, pages 3527–
+3535, 2025. 7
+[20] Dat Huynh and Ehsan Elhamifar. Compositional zero-
+shot learning via fine-grained dense feature composition.
+Advances in Neural Information Processing Systems, 33:
+19849–19860, 2020. 2
+[21] Dat Huynh and Ehsan Elhamifar. Fine-grained generalized
+zero-shot learning via dense attribute-based attention. In
+Proceedings of the IEEE/CVF conference on computer vi-
+sion and pattern recognition, pages 4483–4493, 2020. 2
+[22] Ashraful Islam, Chun-Fu Richard Chen, Rameswar Panda,
+Leonid Karlinsky, Richard Radke, and Rogerio Feris. A
+broad study on the transferability of visual representations
+with contrastive learning. InProceedings of the IEEE/CVF
+International Conference on Computer Vision, pages 8845–
+8855, 2021. 2
+[23] Ali Jahanian, Xavier Puig, Yonglong Tian, and Phillip Isola.
+Generative models as a data source for multiview represen-
+tation learning.arXiv preprint arXiv:2106.05258, 2021. 2
+[24] Huajie Jiang, Zhengxian Li, Xiaohan Yu, Yongli Hu, Bao-
+cai Yin, Jian Yang, and Yuankai Qi. Visual and semantic
+7005
+
+
+=== PAGE 10 ===
+prompt collaboration for generalized zero-shot learning. In
+Proceedings of the Computer Vision and Pattern Recognition
+Conference, pages 20275–20285, 2025. 7
+[25] Prannay Khosla, Piotr Teterwak, Chen Wang, Aaron Sarna,
+Yonglong Tian, Phillip Isola, Aaron Maschinot, Ce Liu, and
+Dilip Krishnan. Supervised contrastive learning.Advances
+in neural information processing systems, 33:18661–18673,
+2020. 2
+[26] Christoph H Lampert, Hannes Nickisch, and Stefan Harmel-
+ing. Attribute-based classification for zero-shot visual object
+categorization.IEEE transactions on pattern analysis and
+machine intelligence, 36(3):453–465, 2013. 1
+[27] Alexander C Li, Mihir Prabhudesai, Shivam Duggal, Ellis
+Brown, and Deepak Pathak. Your diffusion model is secretly
+a zero-shot classifier. InProceedings of the IEEE/CVF Inter-
+national Conference on Computer Vision, pages 2206–2217,
+2023. 2
+[28] Sanath Narayan, Akshita Gupta, Fahad Shahbaz Khan,
+Cees GM Snoek, and Ling Shao. Latent embedding feed-
+back and discriminative features for zero-shot classification.
+InEuropean conference on computer vision, pages 479–495.
+Springer, 2020. 2, 7
+[29] Genevieve Patterson and James Hays. Sun attribute database:
+Discovering, annotating, and recognizing scene attributes.
+In2012 IEEE conference on computer vision and pattern
+recognition, pages 2751–2758. IEEE, 2012. 6
+[30] Long Peng, Wenbo Li, Renjing Pei, Jingjing Ren, Jiaqi Xu,
+Yang Wang, Yang Cao, and Zheng-Jun Zha. Towards real-
+istic data generation for real-world super-resolution.arXiv
+preprint arXiv:2406.07255, 2024. 2
+[31] Aditya Ramesh, Prafulla Dhariwal, Alex Nichol, Casey Chu,
+and Mark Chen. Hierarchical text-conditional image gener-
+ation with clip latents.arXiv preprint arXiv:2204.06125, 1
+(2):3, 2022. 2
+[32] Robin Rombach, Andreas Blattmann, Dominik Lorenz,
+Patrick Esser, and Bj ¨orn Ommer. High-resolution image
+synthesis with latent diffusion models. InProceedings of
+the IEEE/CVF conference on computer vision and pattern
+recognition, pages 10684–10695, 2022. 2
+[33] Oindrila Saha, Zezhou Cheng, and Subhransu Maji. Ganor-
+con: Are generative models useful for few-shot segmenta-
+tion? InProceedings of the IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition, pages 9991–10000,
+2022. 2
+[34] Ziyu Wan, Dongdong Chen, Yan Li, Xingguang Yan, Junge
+Zhang, Yizhou Yu, and Jing Liao. Transductive zero-shot
+learning with visual structure constraint.Advances in neural
+information processing systems, 32, 2019. 2
+[35] Zhicai Wang, Yanbin Hao, Tingting Mu, Ouxiang Li, Shuo
+Wang, and Xiangnan He. Bi-directional distribution align-
+ment for transductive zero-shot learning. InProceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 19893–19902, 2023. 2
+[36] Zhendong Wang, Yifan Jiang, Huangjie Zheng, Peihao
+Wang, Pengcheng He, Zhangyang Wang, Weizhu Chen,
+Mingyuan Zhou, et al. Patch diffusion: Faster and more
+data-efficient training of diffusion models.Advances in neu-
+ral information processing systems, 36:72137–72154, 2023.
+2
+[37] Ryan Webster, Julien Rabin, Loic Simon, and Fr ´ed´eric Ju-
+rie. Detecting overfitting of deep generative networks via la-
+tent recovery. InProceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition, pages 11273–
+11282, 2019. 2
+[38] Peter Welinder, Steve Branson, Takeshi Mita, Catherine
+Wah, Florian Schroff, Serge Belongie, and Pietro Perona.
+Caltech-ucsd birds 200. 2010. 6
+[39] Yongqin Xian, Zeynep Akata, Gaurav Sharma, Quynh
+Nguyen, Matthias Hein, and Bernt Schiele. Latent embed-
+dings for zero-shot classification. InProceedings of the
+IEEE conference on computer vision and pattern recogni-
+tion, pages 69–77, 2016. 2
+[40] Yongqin Xian, Tobias Lorenz, Bernt Schiele, and Zeynep
+Akata. Feature generating networks for zero-shot learning.
+InProceedings of the IEEE conference on computer vision
+and pattern recognition, pages 5542–5551, 2018. 7
+[41] Yongqin Xian, Christoph H. Lampert, Bernt Schiele, and
+Zeynep Akata. Zero-Shot Learning—A Comprehensive
+Evaluation of the Good, the Bad and the Ugly .IEEE Trans-
+actions on Pattern Analysis & Machine Intelligence, 41(09):
+2251–2265, 2019. 1, 6
+[42] Yongqin Xian, Saurabh Sharma, Bernt Schiele, and Zeynep
+Akata. f-vaegan-d2: A feature generating framework for
+any-shot learning. InProceedings of the IEEE/CVF con-
+ference on computer vision and pattern recognition, pages
+10275–10284, 2019. 2, 7
+[43] Zhisheng Xiao, Karsten Kreis, and Arash Vahdat. Tack-
+ling the generative learning trilemma with denoising diffu-
+sion gans.arXiv preprint arXiv:2112.07804, 2021. 2
+[44] Wenjia Xu, Yongqin Xian, Jiuniu Wang, Bernt Schiele, and
+Zeynep Akata. Attribute prototype network for zero-shot
+learning.Advances in Neural Information Processing Sys-
+tems, 33:21969–21980, 2020. 2
+[45] Yang Yang, Yadan Luo, Weilun Chen, Fumin Shen, Jie Shao,
+and Heng Tao Shen. Zero-shot hashing via transferring su-
+pervised knowledge. InProceedings of the 24th ACM in-
+ternational conference on Multimedia, pages 1286–1295,
+2016.
+[46] Zihan Ye, Guanyu Yang, Xiaobo Jin, Youfa Liu, and Kaizhu
+Huang. Rebalanced zero-shot learning.IEEE Transactions
+on Image Processing, 32:4185–4198, 2023. 2
+[47] Zihan Ye, Shreyank N Gowda, Shiming Chen, Xiaowei
+Huang, Haotian Xu, Fahad Shahbaz Khan, Yaochu Jin,
+Kaizhu Huang, and Xiaobo Jin. Zerodiff: Solidified visual-
+semantic correlation in zero-shot learning. InThe Thir-
+teenth International Conference on Learning Representa-
+tions, 2025. 1, 2, 6, 7
+[48] Chong Zhang, Mingyu Jin, Qinkai Yu, Haochen Xue,
+Shreyank N Gowda, and Xiaobo Jin. Bridging the projec-
+tion gap: Overcoming projection bias through parameterized
+distance learning. InProceedings of the Asian Conference
+on Computer Vision, pages 3327–3343, 2024. 7
+[49] Rui Zhang, Ruixu Geng, Yadong Li, Ruiyuan Song, Han-
+qin Gong, Dongheng Zhang, Yang Hu, and Yan Chen. Rf-
+mamba: Frequency-aware state space model for rf-based
+7006
+
+
+=== PAGE 11 ===
+human-centric perception. InThe Thirteenth International
+Conference on Learning Representations, 2025. 2
+[50] Shengyu Zhao, Zhijian Liu, Ji Lin, Jun-Yan Zhu, and Song
+Han. Differentiable augmentation for data-efficient gan
+training.Advances in neural information processing systems,
+33:7559–7570, 2020. 2
+[51] Daquan Zhou, Kai Wang, Jianyang Gu, Xiangyu Peng,
+Dongze Lian, Yifan Zhang, Yang You, and Jiashi Feng.
+Dataset quantization. InProceedings of the IEEE/CVF In-
+ternational Conference on Computer Vision, pages 17205–
+17216, 2023. 2
+[52] Yizhe Zhu, Jianwen Xie, Zhiqiang Tang, Xi Peng, and
+Ahmed Elgammal. Semantic-guided multi-attention local-
+ization for zero-shot learning.Advances in Neural Informa-
+tion Processing Systems, 32, 2019. 2
+7007

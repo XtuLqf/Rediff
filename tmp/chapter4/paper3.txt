@@ -1,0 +1,1220 @@
+
+=== PAGE 1 ===
+Incentivizing Generative Zero-Shot Learning via Outcome-Reward
+Reinforcement Learning with Visual Cues
+Wenjin Hou1 Xiaoxiao Sun2 Hehe Fan1,3 *
+1CCAI, Zhejiang University 2Stanford University
+3State Key Laboratory of CAD&CG, Zhejiang University
+houwj17@gmail.com xxsun@stanford.edu hehefan@zju.edu.cn
+Abstract
+Recent advances in zero-shot learning (ZSL) have demon-
+strated the potential of generative models. Typically, gen-
+erative ZSL synthesizes visual features conditioned on se-
+mantic prototypes to model the data distribution of unseen
+classes, followed by training a classifier on the synthe-
+sized data. However, the synthesized features often remain
+task-agnostic, leading to degraded performance. Moreover,
+inferring a faithful distribution from semantic prototypes
+alone is insufficient for classes that are semantically simi-
+lar but visually distinct. To address these and advance ZSL,
+we propose RLVC, an outcome-reward reinforcement learn-
+ing RL framework with visual cues for generative ZSL. At
+its core, RL empowers the generative model to self-evolve,
+implicitly enhancing its generation capability. In particu-
+lar, RLVC updates the generative model using an outcome-
+based reward, encouraging the synthesis of task-relevant
+features. Furthermore, we introduce class-wise visual cues
+that (i) align synthesized features with visual prototypes and
+(ii) stabilize the RL training updates. For the training pro-
+cess, we present a novel cold-start strategy. Comprehensive
+experiments and analyses on three prevalent ZSL bench-
+marks demonstrate that RLVC achieves state-of-the-art re-
+sults with a 4.7% gain.
+1. Introduction
+Generative models (e.g., variational autoencoders (V AEs))
+[39], generative adversarial networks (GANs) [27], and dif-
+fusion models (DMs) [30]) have emerged as practical so-
+lutions for zero-shot learning (ZSL) [4, 33, 75]. Using
+predefined semantic prototypes (e.g., expert-annotated at-
+tribute vectors [12, 34, 84, 87] or word embeddings of class
+names [16, 53, 55, 73]) as conditions, these models syn-
+thesize high-quality visual features [17, 33, 40] or images
+[21, 25, 31, 42] for unseen classes. As a result, they offer
+*Corresponding author.
+Generative ModelSemantic Prototypes
+Visual Features
+Semantic Prototypes
+Visual Features
+(a) Existing generative ZSL
+Data Distribution
+Data Distribution
+Painted BuntingIndigo Bunting Lazuli Bunting 
+Generative Model
+(b) Our RLVC
+Figure 1. Motivating illustration. (a) Existing generative ZSL
+methods train with adversarial losses conditioned only on semantic
+prototypes. This often leads to task-agnostic synthesized features
+and inter-class overlap. (b) Our RLVC incentivizes the generative
+model updating via RL reward and visual cues, enabling synthe-
+sized features that remain task-relevant and faithfully represent the
+data distribution.
+an unbounded representation space for modeling data dis-
+tributions in generative ZSL, effectively alleviating the lack
+of unseen classes.
+To improve synthesized samples and advance generative
+ZSL, existing ZSL solutions mainly pursue four directions:
+i) fine-tuning the visual backbone on the seen classes of the
+ZSL dataset [56, 76, 87].ii) enforcing visual–semantic con-
+sistency via bidirectional mapping [32, 46].iii) learning en-
+hanced visual features for classifier training [6, 10, 17, 40].
+iv) evolving semantic prototypes with visual features for
+better alignment [12, 33, 45, 87]. Rather than aligning vi-
+sual and semantic features from scratch, recent approaches,
+such as CLIP [61] and SHIP [73], which utilize large-scale
+vision-language pre-training, also provide suitable class
+prototypes. Although impressive, the synthesized features
+obtained via these methods exhibit two limitations:Firstly,
+the generative model is typically optimized independently
+of the downstream classifier, which restricts its ability to
+This CVPR paper is the Open Access version, provided by the Computer Vision Foundation.
+Except for this watermark, it is identical to the accepted version;
+the final published version of the proceedings is available on IEEE Xplore.
+5499
+
+
+=== PAGE 2 ===
+model task-relevant data distributions.Secondly, some
+methods rely exclusively on the semantic conditions, lead-
+ing to overlapping inter-class feature distributions and mis-
+classifications. For example, the classes “Indigo Bunting”,
+“Lazuli Bunting” and “Painted Bunting” are semantically
+similar but visually distinct (see Fig. 1). Hence, we posit
+that richer supervision is necessary to bolster tolerance to
+inter-class variance.
+In light of the above, we presentRLVC, an outcome-
+reward reinforcement learning (RL) framework with class-
+wise visual cues for generative ZSL. At its core, RL mim-
+ics human trial-and-error learning to achieve goals through
+self-evolution (i.e., learning how to take actions to maxi-
+mize reward) [52, 62]. Based on these advantages, we con-
+sider RL’s outcome-based optimization well suited for im-
+proving the capability of generative models (the“Why”).
+Moreover, RL can align the generation process more di-
+rectly with the downstream classification objective, rather
+than relying on adversarial losses tied only to semantic pro-
+totypes, thereby balancing inter-class separation and task
+relevance. In addition, class-wise visual cues act as reliable
+supervision during the training process.
+Specifically, we treat the generator (denoted asG θ) as a
+policy model from the view of RL 1. For task-relevant gen-
+eration, we design a classifier to serve as the reward model.
+We pre-train this reward model to produce an outcome-
+based score (i.e., the predicted probability of the given
+class) as the reward signal. This reward drives updates of
+Gθ, explicitly aligning synthesized features with the down-
+stream classification task. Meanwhile, we mine class-wise
+visual cues from fine-tuned visual features of seen classes
+and take them as visual prototypes. Then, we impose a
+prototype-distillation loss to directly align synthesized fea-
+tures with these visual prototypes. As an additional benefit,
+visual cues also stabilize RL optimization.
+In terms of the training paradigm, we adopt a novel
+cold-start strategy. We first perform some iterations using
+the generative loss, then activate RL training once a pre-
+set threshold is reached. To alleviate gradient conflict and
+improve optimization stability, we employ an alternating
+mechanism at each iteration (i.e., we updateG θ separately
+with the generative adversarial loss and the RL loss). In
+addition, we fine-tune the visual features to mitigate cross-
+dataset bias and enhance generalization. Consequently,
+RLVC synthesizes features that faithfully represent the data
+distribution and remain task-relevant (Fig. 1(b)), effectively
+alleviating the above issues.
+To sum up, our core contributions can be concluded as:
+•Novel perspective. We present RLVC from an RL view-
+point. To our knowledge, this is the first attempt to ana-
+lyze and apply RL to generative ZSL.
+1Throughout the paper, “generative model”, “generator”, and “policy
+model” are interchangeable terms in our method.
+•Controlled framework. We introducean outcome-
+reward reinforcement-learning framework with visual
+cuesto incentivize the generative model. We further
+present a novel cold-start training recipe to stabilize the
+optimization process.
+•Empirical validation. We conduct systematic empirical
+validation across three critical ZSL benchmark datasets.
+Our experiments reveal that RLVC significantlyoutper-
+formscurrent state-of-the-art (SOTA) ZSL methods.
+2. Related Works
+2.1. Zero-Shot Learning
+The goal of ZSL is to recognize unseen classes by knowl-
+edge learned from seen ones [43, 58]. Classical solu-
+tions are typically categorized into two paradigms accord-
+ing to the ultimate classification space. The earlier one is
+projection methods (i.e., embedding methods), which di-
+rectly map visual features to the semantic space with a
+transformation function supervised by semantic prototypes
+[1, 5, 13, 15, 18, 19, 22, 34, 35, 50, 54, 55, 70, 79, 81].
+The second paradigm can be viewed as a data augmenta-
+tion strategy (i.e., generative methods). It synthesizes vi-
+sual features to represent the data distribution of unseen
+classes. Then, training a classifier in the visual space to per-
+form ZSL [2, 4, 6, 7, 11, 12, 17, 25, 29, 33, 66, 75, 84, 87].
+For embedding methods, recent advances mainly learn lo-
+cally aligned visual–semantic correspondences via attention
+mechanisms. For instance, TransZero++ [8, 9] and ZS-
+LViT [14] employ transformer-based cross-modal attention
+to align visual patches with attributes. PSVMA+ [48, 49]
+and VSPCN [37] enforce progressive visual–semantic mu-
+tual alignment. Despite these advancements, the learned
+embedding space of this line of work often exhibits bias
+toward seen classes [86]. Besides, under weak semantic
+conditions (e.g., class names), achieving fine-grained local
+alignment remains challenging [16, 77]. Therefore, genera-
+tive methods have received increasing attention recently.
+Within the generative paradigm, early methods focus on
+bidirectional semantic↔visual consistency with simple de-
+coders andℓ 1/ℓ2 losses, such as cycle-CLSWGAN [23],
+FREE [6], and TFV AEGAN [56]. LisGAN [44] and Lsr-
+GAN [69] take a classification loss as a part of the dis-
+criminator loss. Subsequent work improves training strate-
+gies: CE-GZSL [29] and ICCE [40] learn contrastive em-
+beddings; ZLAP [5] adjusts logits; ESZSL [4] proposes
+sample probing, SC-EGG [32] adopts an embedding-guided
+generator; and ZeroNAS [84] introduces NAS into ZSL.
+More recent advances, such as TDCSS [24], DSP [12],
+V ADS [33], GenZSL [16], ViFR [17], and ZeroDiff [87],
+inject stronger priors and model unseen class–conditional
+distributions more faithfully [88]. Despite this progress,
+two structural issues persist:i) most approaches optimize
+5500
+
+
+=== PAGE 3 ===
+Policy Model𝐺!(𝝐,𝐳",𝐱#,𝑡)
+fine-tuned visual features
+timestep𝑡
+𝐳!
+RewardModelsemantic prototypes
+𝐱"
+synthesized featuresEMA
+𝑟
+̂
+𝑟
+TrainingFreezeFeatureData Flow
+𝑟Reward
+̂
+𝑟Advantage
+Policy Optimization via  Eq. (11)
+Visual Cues
+Distill via Eq. (13) 
+(a) Reward Model Training
+(b) RLVC Trainingvisual prototypes#𝐱"
+RewardModel
+𝐱"
+noise𝝐
+EMAExponential Moving Average
+Figure 2. Model architecture and training of RLVC. The top panel shows how we train the reward model with a visual encoder to produce
+fine-tuned visual features and reward signals. The bottom panel depicts how we update the policy modelG θ (i.e., generator) via outcome-
+reward reinforcement learning (blue arrows) and visual cues (green arrows), enabling synthesized features that remain task-relevant and
+faithfully represent the data distribution.x 0 and ˜x0 denote the real and synthesized features of seen classes, respectively.
+the generator independently of the downstream classifier,
+yieldingtask-agnosticfeatures; andii) semantic-only con-
+ditions often induceinter-class confusion, especially for
+fine-grained categories that are semantically similar but vi-
+sually distinct. Inspired by the success of RL in vision,
+we propose an RL framework to improve the generator’s
+modeling capability. Meanwhile, we mine class-wise visual
+cues to distill richer visual information for feature synthesis.
+2.2. Reinforcement Learning for Visual Tasks
+RL optimizes decision-making by interacting with an envi-
+ronment to maximize cumulative reward. Its applications
+span gaming, embodied AI, finance, and puzzle [26, 64, 65,
+67]. More recently, RL has played an increasingly impor-
+tant role in post-training of large language models (LLMs)
+to enhance reasoning ability [41]. Frontier models such as
+DeepSeek-R1 [28], OpenAI o1 [36], and Qwen [71, 85] em-
+ploy verifiable rewards to optimize task performance, en-
+couraging models to align with human intentions [51, 72].
+Motivated by RL’s ability to self-evolve in the language
+domain and its strong generalization, the vision commu-
+nity has begun to explore effective RL frameworks. For
+example, Visual-RFT [52] and VPRL [83] introduce visual
+reinforcement fine-tuning (RFT) and extend RFT to visual
+tasks. Broadly, these efforts either design task-grounded re-
+wards or feedback (e.g., accuracy rewards, format rewards
+[52]) or develop more efficient optimization strategies (e.g.,
+DPO [80], GRPO [63]). Building on these insights, we
+make the first attempt to investigate whether RL can ad-
+vance ZSL. Rather than proposing complex policy opti-
+mization algorithms, we aim to provide a simple pipeline
+based on outcome-reward RL for faithful visual synthesis
+in ZSL.
+3. RLVC
+Motivation and Overview.In this section, we present the
+core design of RLVC. Our objective is to extend the gener-
+ative model’s modeling capacity to construct data represen-
+tations well-suited for classification. To this end, we treat
+the generator as a policy and optimize it via RL. A key
+component in RLVC is a reward model that delivers task-
+specific reward signals, enabling stronger model optimiza-
+tion. Within a coherent framework, RLVC first trains the
+reward model together with the visual encoder. During pol-
+icy training, the fine-tuned visual features are used to mine
+visual cues, and the reward model produces an outcome re-
+ward (see Fig. 2). We detail these designs and the training
+procedure in§3.2,§3.3 and§3.4.
+Problem Statement.LetY s andY u denote the disjoint sets
+of seen and unseen classes, respectively, withY s ∩ Y u =∅
+andC s =|Y s|,C u =|Y u|. Training data are avail-
+able only for seen classes:D tr ={(x s
+i , y s
+i ,z ys
+i )}Ntr
+i=1,
+wherex s
+i ∈ Xis a visual feature,y s
+i ∈ Y s is its label,
+andz c ∈ Adenotes the semantic prototype for classc
+(e.g., an attribute vector or a text embedding). Semantic
+prototypes{z c}c∈Y s∪Y u are assumed to be available for
+both seen and unseen classes. In the conventional ZSL
+(CZSL) setting, the test set contains only unseen classes
+Dte,u ={(x u
+j , y u
+j ,z yu
+j )}Nu
+j=1, and the goal is to learn a
+classifierf CZSL :X → Y u. In the generalized ZSL (GZSL)
+setting, the test set includes both seen and unseen samples,
+Dte =D te,s ∪ D te,u withD te,s ⊆ X × Y s andD te,u ⊆
+X × Y u, and the goal becomesf GZSL :X → Y s ∪ Yu. The
+objective in both settings is to leverageD tr and the seman-
+tic prototypes{z c}to minimize the expected classification
+error on the corresponding test domain.
+5501
+
+
+=== PAGE 4 ===
+3.1. Diffusion-based Generative Framework
+Motivated by the strong generative capacity of diffusion
+models, we adopt a diffusion-based adversarial framework
+[78, 87]. For simplicity, the framework comprises a genera-
+torG θ and two discriminators,D x0 andD xt. Given a class
+prototypez c, Gaussian noiseϵ∼ N(0,I), and a diffusion
+statex t at timestept, the generator outputs a visual feature:
+˜x0 =G θ
+
+ϵ,z c,x t, t
+
+∈R d.(1)
+Conditioned onz c, the two discriminators operate as fol-
+lows.D x0 distinguishes real clean features (x 0) from syn-
+thesized ones ( ˜x0).D xt contrasts the real transition (x t,
+xt+1) with the synthesized transition ( ˜xt,x t+1), where ˜xt
+is obtained from ˜x0 andx t+1 via a first-order posterior up-
+date. The optimization objectives are as follows:
+LDx0 =−E
+
+Dx0 (x0,z c)
+
++E
+
+Dx0 (˜x0,z c)
+
++λ gp GPx0 ,(2)
+LDxt =−E
+
+Dxt (xt,x t+1,z c, t)
+
++E
+
+Dxt (˜xt,x t+1,z c, t)
+
++λ gp GPxt ,
+(3)
+LD =L Dx0 +L Dxt ,(4)
+Ladv
+G =−E
+
+Dx0 (˜x0,z c)
+
+−E
+
+Dxt (˜xt,x t+1,z c, t)
+
+,(5)
+whereλ gp is the gradient-penalty weight andGPdenotes
+the gradient penalty. During training, we alternately update
+the discriminator objective in Eq. (4) and the generator ob-
+jective in Eq. (5).
+3.2. Outcome-Reward Reinforcement Learning
+In generative ZSL, a core challenge is to align generative ca-
+pacity with discriminative representations that downstream
+classifiers can reliably use. However, purely adversarial ob-
+jectives often synthesize task-agnostic features. To bridge
+this gap, we introduce anoutcome-reward reinforcement
+learning (RL)to directly incentivize the generator toward
+task-relevant synthesis. From the RL perspective, we opti-
+mize the policy via self-evolving updates to favor features
+that are more likely to be correctly classified. Concretely,
+a frozen classifierRserves as the reward model.Ris im-
+plemented as a linear layer,i.e.,R(x) =Wx+bwith
+W∈R C×d, mapping ad-dim visual feature toCclass log-
+its. Given a synthesized feature ˜x0,Routputs logits that are
+converted to probabilities via thesoftmaxoperation,
+p(y| ˜x0) = softmax
+
+R(˜x0)
+
+y,(6)
+and we calculate the log-probability of the ground-truth
+class as the outcome rewardr:
+r= logp(y| ˜x0).(7)
+Intuitively, higher confidence ofRon the correct class
+for ˜x0 yields a largerr, which in turn steers the generator’s
+updates accordingly.
+Furthermore, to stabilize training and improve perfor-
+mance, we use an exponential moving average (EMA) base-
+linebover mini-batch rewards to compute the advantageˆri.
+This process is formally defined as:
+b←α b+ (1−α) 1
+B
+BX
+i=1
+ri,(8)
+ˆri =r i −b,(9)
+whereBis the batch size andα∈[0,1)controls smoothing
+(in experiments, we setα= 0.9). Moreover, we employ a
+stop-gradient operatorsg[·]forˆr i, so that it is treated as a
+constant without gradients and define the final advantage as:
+bAi = sg[ˆri].(10)
+Finally, the RL objectiveL RL for the policy model is:
+LRL =− 1
+B
+BX
+i=1
+bAi logp(y i | ˜x0,i).(11)
+Sincelogp(y i | ˜x0,i)is differentiable with respect to
+˜x0,i, gradients propagate throughRand Eq. (6) to ˜x0,i
+and then toG θ (while keepingR’s parameters fixed). This
+outcome-based reward drives the policy to enhance its gen-
+eration capability with clear guidance, enabling more dis-
+criminative, task-relevant synthesis in the feature space.
+3.3. Visual Cues with Prototype-Distillation Loss
+Although semantic prototypes provide strong conditions,
+they are inadequate to faithfully represent data distributions
+for classes that are semantically similar but visually distinct.
+Additionally, it is common to include a Kullback–Leibler
+(KL) regularizer in the objective to constrain distributional
+shift and stabilize training in RL. Building on these insights,
+we introduce class-wisevisual cuesas visual prototypes,
+following prototype learning frameworks [60]. As illus-
+trated in Fig. 2, we mine visual cues from the fine-tuned
+visual features. Specifically, we gather all features belong-
+ing to each seen class and compute their mean. Formally,
+letI c ={i|y s
+i =c}index the training samples of class
+c∈ Y s, and letx s
+i ∈R d denote the corresponding fine-
+tuned visual features. The visual prototype is:
+v c = 1
+|Ic|
+X
+i∈Ic
+xs
+i ∈R d.(12)
+During policy optimization, we impose a prototype-
+distillation lossL PD that distills the synthesized features to
+align with the corresponding visual prototype:
+LPD = 1
+B
+BX
+i=1
+ 
+1−
+˜x⊤
+0,iv ci
+∥˜x0,i∥2 ∥v ci ∥2
+!
+.(13)
+5502
+
+
+=== PAGE 5 ===
+100 200 300 400 500
+Epoch
+-5.3
+-5.3
+-5.3
+-5.3
+-5.3
+-5.3Average Reward
+Raw Reward
+100 200 300 400 500
+Epoch
+-0.0004
+-0.0002
+0.0000
+0.0002
+0.0004
+Average Advantage
+Advantage
+Average: 0.00
+0 100 200 300 400 500
+Epoch
+0
+20
+40
+60
+80
+100Accuracy (%)
+ZSL Accuracy
+Figure 3. The training trends of our RLVC on CUB, including raw reward, EMA-adjusted advantage and ZSL accuracy.
+This term pulls generated features closer to real data dis-
+tribution and stabilizes the RL updates. We incorporate this
+loss into the generator update:
+Ltotal
+G =L adv
+G +λ PD LPD,(14)
+whereλ PD is a coefficient. We optimizeG θ by minimizing
+Ltotal
+G . We also compareL PD with alternative losses (e.g.,
+KL,ℓ 1) to validate the robustness of our design (Table 4).
+3.4. Cold-Start Training Procedure
+To ensure effective optimization, RLVC adopts a novel
+cold-start schedule inspired by post-training frameworks for
+large language models (i.e., RL is disabled during the initial
+phase) [28]. Concretely, we first train for some epochs using
+the adversarial objective until the synthesized features ex-
+hibit basic class separability. Then, RL is activated to align
+generation with the downstream classification task further.
+To avoid gradient conflict after the cold-start threshold (i.e.,
+ERL), we alternately update the policy modelG θ within
+each iteration via Eq. (14) and Eq. (11), rather than simply
+summing the two losses.
+We summarize the complete procedure in Algorithm 1
+for clarity. We also report the training trends of the raw re-
+ward, the EMA-adjusted advantage, and ZSL accuracy in
+Fig. 3. Empirically, the reward increases and then stabi-
+lizes, the advantage exhibits only small fluctuations, and the
+ZSL accuracy gains steadily. These trends consistently in-
+dicate that the model trains successfully and remains stable.
+3.5. Inference for CZSL and GZSL
+At inference time, we freeze the generatorG θ and syn-
+thesize visual features for unseen classes via Eq. (1). No
+additional tricks are used. For CZSL, we train a standard
+softmax classifier solely on the synthesized unseen features.
+For GZSL, we train the classifier on the union of the fine-
+tuned seen features and the synthesized unseen features.
+Further details of the classifier follow prior work [12, 33].
+4. Experiments
+In this section, we evaluate RLVC, aiming to answer the
+following questions:(1) Can RLVC effectively and consis-
+Algorithm 1Training the Policy ModelG θ
+Require:Minibatches(x, y,z,v); weightsλ PD; RL start
+epochE RL; total epochsE; critic stepsK.
+1:InitializeG θ,D x0 , Dxt; freeze reward modelR.
+2:procedureTRAINING(G θ,D x0 , Dxt)
+3:forepoch= 1toEdo
+4:foreach minibatchdo
+5:fork= 1toKdo
+6:Sample noise, timesteps ˜x0 and ˜xt.
+7:UpdateD x0 , Dxt via Eq. (4).
+8:end for
+9:Sample noise, timesteps, ˜x0 and ˜xt.
+10:ComputeL adv
+G via Eq. (5).
+11:ComputeL PD via Eq. (13).
+12:UpdateG θ via Eq.(14).▷adversarial
+13:ifepoch≥E RL then▷cold-start threshold
+14:Form advantage via Eqs. (6)–(10).
+15:UpdateG θ via Eq. (11).▷RL update
+16:end if
+17:end for
+18:end for
+19:returnoptimized policyG θ
+20:end procedure
+tently improve ZSL accuracy on standard benchmarks (Ta-
+bles 1 and 2)? (2) Do individual design choices of RLVC
+contribute to the observed accuracy gains (Tables 3 and 4)?
+(3) Does RLVC induce task-relevant feature distributions in
+the representation space (Fig. 4)? (4) How do hyperparam-
+eters impact performance (Fig. 5)?
+4.1. Experimental Setup
+Datasets.We evaluate on three widely used ZSL datasets:
+•CUB[74]: a fine-grained bird dataset with 11,788 images
+over 150/50 seen/unseen classes and 312 attributes.
+•SUN[59]: a fine-grained scene corpus totals 14,340 im-
+ages from 645/72 seen/unseen classes with 102 attributes.
+•A W A2[76]: a coarse-grained animal dataset comprising
+37,322 images across 40/10 seen/unseen classes with 85
+attribute annotations.
+5503
+
+
+=== PAGE 6 ===
+Table 1. Compared our RLVC with the SOTA methods in CZSL and GZSL settings on CUB, SUN and AW A2 benchmarks. The symbol
+“⋆” indicates the semantic prototypes from the class name. The symbol “–” denotes that no results are provided in the original papers. The
+boldand underlined markings indicate the best and second-best results, respectively.
+Method Backbone CUB SUN AW A2
+Acc U S H Acc U S H Acc U S H
+Embedding
+CLIP⋆ [ICML’21] [61] ViT – 55.2 54.8 55.0 – – – – – – – –
+TransZero++ [TPAMI’22] [8] ResNet 78.3 67.5 73.6 70.4 67.6 48.6 37.8 42.5 72.6 64.6 82.7 72.5
+DUET [AAAI’23] [18] ViT 72.3 62.9 72.8 67.5 64.4 45.7 45.8 45.8 69.9 63.7 84.7 72.7
+ICIS [ICCV’23] [20] ResNet 60.6 45.8 73.7 56.5 51.8 45.2 25.6 32.7 64.6 35.6 93.3 51.6
+HAS [ACM MM’23] [19] ResNet 76.5 69.6 74.1 71.8 63.2 42.8 38.9 40.8 71.4 63.1 87.3 73.3
+I2DFormer+ [IJCV’24] [55] ViT 45.9 38.3 55.2 45.3 – – – – 77.3 69.8 83.2 75.9
+DSECN [CVPR’24] [47] ResNet 40.9 – – 45.3 40.0 – – 38.5 49.1 – – 53.7
+ZSLViT [CVPR’24] [14] ViT 78.9 69.4 78.2 73.6 68.3 45.9 48.4 47.3 70.7 66.1 84.6 74.2
+PSVMA+ [TPAMI’24] [49] ViT 78.8 71.8 77.8 74.6 74.5 61.5 49.4 54.8 79.2 74.2 86.4 79.8
+ZeroMamba [AAAI’25] [34] VMamba 80.8 72.1 76.4 74.2 72.4 56.5 41.4 47.7 71.9 67.9 87.6 76.5
+AENet [AAAI’25] [50] ViT 80.3 73.1 76.4 74.7 70.0 58.6 45.2 51.0 75.2 70.3 80.1 74.9
+VSPCN [CVPR’25] [37] ViT 80.6 72.8 78.9 75.7 75.3 59.4 49.1 53.8 76.6 71.8 84.3 77.6
+Generative
+HSV A [NeurIPS’21] [7] ResNet – 52.7 58.3 55.3 – 48.6 39.0 43.3 – 56.7 79.8 66.3
+CE-GZSL [CVPR’21] [29] ResNet 77.5 63.9 66.8 65.3 63.3 48.8 38.6 43.1 70.4 63.1 78.6 70.0
+SC-EGG [IJCAI’22] [32] ResNet 75.1 64.1 73.6 68.5 69.2 45.1 43.6 44.3 78.2 60.9 89.3 72.4
+VGSE-APN [CVPR’22] [82] ResNet 28.9 21.9 45.5 29.5 38.1 24.1 31.8 27.4 64.0 51.2 81.8 63.0
+ICCE [CVPR’22] [40] ResNet 72.7 67.3 65.5 66.4 – – – – 78.4 65.3 82.3 72.8
+FREE + ESZSL [ICLR’22] [4] ResNet – 51.6 60.4 55.7 – 48.2 36.5 41.5 – 51.3 78.0 61.8
+TDCSS [CVPR’22] [24] ResNet – 44.2 62.8 51.9 – – – – – 59.2 74.9 66.1
+DSP [ICML’23] [12] ResNet – 51.4 63.8 56.9 – 48.3 43.0 45.5 – 60.0 86.0 70.7
+EGANS [TEVC’23] [11] ResNet 60.2 47.8 59.2 52.9 62.8 44.2 37.4 40.5 70.6 53.9 81.8 65.0
+ZeroNAS [TPAMI’23] [84] ResNet 66.4 56.0 63.8 59.6 68.3 47.1 41.8 44.3 73.2 61.4 75.3 67.6
+CDL + OSCO [TPAMI’23] [3] ResNet – 29.0 69.0 40.6 – 32.065.042.9 – 48.0 71.0 57.1
+TF-V AEGAN + SHIP⋆ [ICCV’23][73]ViT – 21.184.434.0 – – – – – 43.796.360.1
+V ADS [CVPR’24] [33] ViT 86.8 74.1 74.6 74.3 76.3 64.649.0 55.7 82.5 75.4 83.6 79.3
+ViFR [IJCV’25] [17] ResNet 74.5 63.9 72.0 67.6 69.2 51.3 40.0 44.7 77.8 68.2 78.9 73.2
+RLVC (ours) ViT 90.1 80.9 81.4 81.2 77.7 59.6 55.6 57.6 84.0 78.4 82.4 80.4
+Evaluation Metric.Following the standard evaluation pro-
+tocol [13, 14], we evaluate RLVC under both CZSL and
+GZSL with average top-1 accuracy. In the CZSL setting, we
+report the accuracy on the test set of unseen classes (Acc).
+In the GZSL setting, we report accuracy on the seen (S) and
+unseen (U) test sets, together with their harmonic meanH=
+(2×S×U) / (S+U), which balances performance across
+the two splits.
+Implementation Details.To ensure a fair comparison and
+reproducibility, we provide implementation details. For the
+visual encoder, we fine-tune a ViT to alleviate cross-dataset
+bias and use the[CLS]token to extract the visual feature
+[57]. We adopt the Adam optimizer (betas= (0.5,0.999))
+[38]. The learning rates are5×10−4 for Eq. (5) and5×10−5
+for Eq. (11). We activate RL atE RL = 30for CUB and
+SUN, and atE RL = 7for AW A2. The prototype-distillation
+weightλ PD, the number of synthesized samples per class,
+and the total number of training epochs are set to{20,1,5},
+{400,400,4000}, and{500,300,30}for CUB, SUN, and
+AW A2, respectively. All the experiments are run on a single
+NVIDIA RTX 4090 GPU (24 GB) and implemented using
+the PyTorch framework.
+4.2. Core Results
+Table 1 compares our RLVC with recent SOTA embedding
+and generative ZSL methods reported in top-tier venues.
+We highlight our findings below:(1) RLVC exhibits
+the best CZSL accuracy on all three benchmarks,i.e.,
+90.1%, 77.7%, and 84.0% on CUB, SUN, and AW A2.
+These accuracies surpass the previous best method, V ADS
+[33], by 3.1%, 1.4%, and 1.5%, respectively.(2) In the
+GZSL setting, RLVC achieves the top harmonic mean
+H on all datasets and strikes a more effective trade-off
+between seen and unseen accuracy.Compared with the
+second-best methods, like VSPCN [37] on CUB, V ADS
+[33] on SUN, and PSVMA+ [49] on AW A2, RLVC notably
+increasesHby 5.5%, 1.5%, and 0.6%, respectively. While
+RLVC does not achieve the best values ofSandUon every
+dataset, it balances them more effectively, resulting in the
+highestHacross all datasets. BothUandSare competitive
+against SOTA methods using ViT, VMamba, and ResNet
+backbones. Moreover, the VLM-based method SHIP [73]
+demonstrates outstanding performance on seen classes, yet
+it fails to generalize well to unseen classes.
+5504
+
+
+=== PAGE 7 ===
+Table 2. Effectiveness validation of RLVC across different semantic prototypes, including word embeddings of class names and expert-
+annotated attribute vectors. We mark the best results inboldand the accuracy gains (%) in parentheses.
+Method Semantic prototype CUB SUN AW A2
+Acc U S H Acc U S H Acc U S H
+Vanilla model word embedding 61.8 52.4 66.3 58.5 72.0 55.4 46.4 50.5 73.1 62.8 82.3 71.2
+RLVC word embedding62.8(+1.0)51.5 70.9 59.7(+1.2)72.1(+0.1)55.0 50.3 52.5(+2.0)74.5(+1.4)61.3 91.7 73.5(+2.3)
+Vanilla model attribute vector 88.6 71.0 79.8 75.1 75.8 58.3 52.3 55.1 75.7 70.1 76.0 72.8
+RLVC attribute vector90.1(+1.5)80.9 81.4 81.2(+6.1)77.7(+1.9)59.6 55.6 57.6(+2.6)84.0(+8.3)78.4 82.4 80.4(+7.6)
+Table 3. Results of RLVC variants on CUB, SUN and AW A2
+datasets. We ablate specific components to assess their effective-
+ness. Theboldmarking indicates the best results.
+Configuration CUB SUN AW A2
+Acc H Acc H Acc H
+RLVC w/o RL & visual cues 88.6 75.1 75.8 55.1 75.7 72.8
+RLVC w/o RL (i.e., Eq. (11)) 89.2 80.1 76.1 55.6 79.4 73.9
+RLVC w/o visual cues (i.e., Eq. (13)) 88.9 79.2 77.0 56.9 74.9 76.6
+RLVC w/o fine-tuning visual encoder 89.2 77.5 76.0 56.4 81.1 76.3
+RLVC w/o advantage (i.e., Eq. (9)) 89.6 79.7 76.0 56.0 82.4 78.2
+RLVC 90.1 81.2 77.7 57.6 84.0 80.4
+These results consistently demonstrate the superiority
+and strong generalization of our RLVC. Furthermore, they
+indicate that the proposed outcome-reward RL with visual
+cues effectively guides generation toward task-relevant fea-
+tures rather than merely distributionally plausible ones.
+4.3. RLVC with Different Semantic Prototypes
+To verify the reliability and show the robustness of our pro-
+posed RLVC, particularly for semantically similar classes,
+we conduct a comparative experiment and analysis across
+different semantic prototypes. We consider two types of
+prototypes: word embeddings of class names from the CLIP
+text encoder [61] and expert-annotated attribute vectors.
+Maintaining the same hyperparameters, we compare the
+performance of the full RLVC to that of a vanilla genera-
+tive model (i.e., without the proposed RL and visual cues).
+As shown in Table 2, empirical results indicate that
+RLVC improves bothAccandHacross all class proto-
+type types and all datasets, with gains ranging from 0.1%
+to 8.3%. These results confirm that RLVC provides a faith-
+ful and task-relevant feature synthesis. Consequently, it
+enhances the discriminative power of visual features, even
+when using challenging word embeddings of class names
+that encode strong semantic similarity. To some extent, this
+accuracy increase also highlights the importance of align-
+ing synthesized features with visual prototypes. It is worth
+noting that our RLVC also surpasses CLIP on CUB.
+4.4. Ablation Study and Analysis
+Ablation on Components.In Table 3, we conduct com-
+prehensive ablation studies to evaluate the effectiveness of
+our proposed designs in RLVC. Applying our proposed op-
+Table 4. Comparison results for different prototype-distillation
+losses combined with RLVC on CUB, SUN and AW A2 datasets.
+Theboldmarking indicates the best results.
+Loss CUB SUN AW A2
+Acc H Acc H Acc H
+KL88.9 80.1 77.258.276.4 76.4
+ℓ1 89.2 80.9 77.3 57.8 75.9 77.6
+LPD 90.1 81.2 77.7 57.6 84.0 80.4
+erations results in a significant improvement in accuracy
+over the vanilla model. In CZSL, the average increase in
+Accis 3.9%, and in GZSL, the average increase inHis
+5.3%.RL is crucial:Without RL, the performance drops
+significantly, especially on the AW A2 dataset (e.g.,Acc/H
+drops from 84.0%/80.4% to 79.4%/73.9%). This indicates
+that RL significantly enhances the model’s learning capa-
+bilities in both data distribution and task relevance.Visual
+cues are beneficial:Mining visual cues as visual proto-
+types and applying a prototype-distillation loss centralizes
+the synthesized features while also stabilizing training. It
+can be observed that omitting this component substantially
+degrades performance on all benchmarks.Visual encoder
+fine-tuning is essential:We do not optimize the visual en-
+coder separately. Instead, we fine-tune it with the reward
+model. This reduces training overhead and simultaneously
+alleviates domain bias. The fine-tuned visual features in-
+ject dataset-specific priors, which is beneficial for GZSL
+(Hincreases by 3.7%, 1.2%, and 4.1% for CUB, SUN,
+and AW A2, respectively).EMA reward smoothing out-
+performs raw reward:Our investigation demonstrates that
+smoothing the reward using Eq. (9) offers substantial per-
+formance advantages over using the raw reward directly.
+This also suggests that algorithms specifically tailored for
+RL optimization are beneficial.
+Ablation on Prototype-Distillation Losses.Compared
+to the standard KL loss, we introduce a novel prototype-
+distillation loss (Eq. (13)). As shown in Table 4, our loss
+outperforms KL andℓ 1 in most cases, with the exception of
+the GZSL setting on SUN. We attribute this to the proposed
+loss being better suited for clustering and for distilling pro-
+totype information into the model.
+5505
+
+
+=== PAGE 8 ===
+Figure 4. Qualitative t-SNE visualization of RLVC on CUB: (a) without RL and visual cues, (b) without visual cues, and (c) full RLVC.
+We use real features of seen classes and synthetic features of unseen classes. Zoom in for details.
+Accuracy (%)
+81
+84
+88
+91
+95
+0 10 30 50 100
+U
+ S
+ H
+ Acc
+Epoch
+Accuracy (%)
+81
+84
+88
+91
+95
+1 5 20 40 50
+U
+ S
+ H
+ Acc
+Coefficient
+Accuracy (%)
+67
+74
+81
+88
+95
+100 200 300 400 500
+U
+ S
+ H
+ Acc
+Number
+Figure 5. Effect of hyperparameters on CUB, including the epoch of RL cold-start, the coefficient of visual loss, and the number of
+synthetic unseen samples.
+4.5. Qualitative Evaluation
+To intuitively illustrate the distribution of the synthesized
+data, we use t-SNE visualization [68] to display the re-
+sults from (a) the vanilla model (i.e., without RL and vi-
+sual cues), (b) the model without visual cues, and (c) our
+full RLVC on CUB in Fig. 4. The visualization includes
+10 real seen classes and 10 synthesized unseen classes, de-
+noted by⋆and◦, respectively. The blue circle denotes “Bal-
+itimore Oriole” and “Orchard Oriole”, and the green circle
+denotes “Harris Sparrow”, “Lincoln Sparrow”, “Le Conte
+Sparrow”, “White crowned Sparrow” and “Tree Sparrow”.
+Within each circle, they are semantically similar.
+Visually, in (a) the vanilla model (i.e., without RL and
+visual cues), seen and unseen classes are significantly over-
+lapped, particularly for semantically similar categories. In
+contrast, (b) without visual cues and (c) our RLVC exhibit
+clear boundaries, contributing to classification. Compara-
+tively, RLVC imposes a visual prototype constraint, leading
+to each class demonstrating more compact clustering. Over-
+all, our RLVC learns a task-relevant, more accurate data dis-
+tribution, which aligns with our motivation.
+4.6. Hyperparameter Analysis
+We conduct a sensitivity analysis for several key hyperpa-
+rameters on the CUB to validate our default configuration,
+with results shown in Fig. 5. This analysis includes: the
+epoch of RL cold-start, the coefficient of visual loss, and the
+number of synthetic unseen samples. The cold-start mech-
+anism stabilizes initial RL training. Our experiments show
+that a value of 30 ensures stable training while achieving op-
+timal performance. The visual loss coefficient balances the
+generative objective against prototype-based feature clus-
+tering. As its value increases, performance first rises, then
+falls, peaking at 20. The number of synthetic samples for
+unseen classes impacts the accuracy balance between seen
+and unseen classes. The bestHis achieved when it is set
+to 400. These results confirm the rationality and robustness
+of our hyperparameter choices. We provide the detailed set-
+tings for each dataset in §4.1.
+5. Conclusion
+In this work, we present RLVC, an outcome-reward rein-
+forcement learning framework with visual cues for gen-
+erative ZSL. This framework aims to learn features well-
+suited for classification by strengthening the model’s gener-
+ative capability. Equipped with a carefully designed cold-
+start training strategy, RLVC reliably synthesizes features.
+Through qualitative and quantitative experiments on three
+ZSL benchmarks, we show that RLVC consistently out-
+performs existing methods. As an initial exploration of
+reinforcement learning for generative ZSL, we highlight
+RLVC’s potential. This approach may also benefit broader
+tasks and robust training recipes.
+5506
+
+
+=== PAGE 9 ===
+Acknowledgments
+This work was supported by the National Key R&D Pro-
+gram of China (2023YFC3305600) and the National Natu-
+ral Science Foundation of China (92570101).
+References
+[1] Mina Ghadimi Atigh, Stephanie Nargang, Martin Keller-
+Ressel, and Pascal Mettes. Simzsl: Zero-shot learning be-
+yond a pre-defined semantic embedding space.International
+Journal of Computer Vision, pages 1–17, 2025. 2
+[2] Jacopo Cavazza, Vittorio Murino, and Alessio Del Bue.
+No adversaries to zero-shot learning: Distilling an ensem-
+ble of gaussian feature generators.IEEE Transactions on
+Pattern Analysis and Machine Intelligence, 45(10):12167–
+12178, 2023. 2
+[3] Jacopo Cavazza, Vittorio Murino, and Alessio Del Bue. No
+adversaries to zero-shot learning: Distilling an ensemble of
+gaussian feature generators.IEEE Transactions on Pattern
+Analysis and Machine Intelligence, 2023. 6
+[4] Samet Cetin. Closed-form sample probing for training gen-
+erative models in zero-shot learning. Master’s thesis, Middle
+East Technical University, 2022. 1, 2, 6
+[5] Dubing Chen, Yuming Shen, Haofeng Zhang, and Philip HS
+Torr. Zero-shot logit adjustment.arXiv preprint
+arXiv:2204.11822, 2022. 2
+[6] Shiming Chen, Wenjie Wang, Beihao Xia, Qinmu Peng,
+Xinge You, Feng Zheng, and Ling Shao. Free: Feature re-
+finement for generalized zero-shot learning. InProceedings
+of the IEEE/CVF international conference on computer vi-
+sion, pages 122–131, 2021. 1, 2
+[7] Shiming Chen, GuoSen Xie, Yang Liu, Baigui Sun, Hao Li,
+Xinge You, and Ling Shao. Hsva: Hierarchical semantic-
+visual adaptation for zero-shot learning.Advances in Neural
+Information Processing Systems, 34:16622–16634, 2021. 2,
+6
+[8] Shiming Chen, Ziming Hong, Wenjin Hou, Guo-Sen Xie,
+Yibing Song, Jian Zhao, Xinge You, Shuicheng Yan, and
+Ling Shao. Transzero++: Cross attribute-guided transformer
+for zero-shot learning.TPAMI, 2022. 2, 6
+[9] Shiming Chen, Ziming Hong, Yang Liu, Guo-Sen Xie,
+Baigui Sun, Hao Li, Qinmu Peng, Ke Lu, and Xinge You.
+Transzero: Attribute-guided transformer for zero-shot learn-
+ing. InAAAI, page 3, 2022. 2
+[10] Shiming Chen, Ziming Hong, Guo-Sen Xie, Wenhan Yang,
+Kai Wang, Jian Zhao, and Xinge You. Msdn: Mutually se-
+mantic distillation network for zero-shot learning. InPro-
+ceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition, pages 7612–7621, 2022. 1
+[11] Shiming Chen, Shuhuang Chen, Wenjin Hou, Weiping Ding,
+and Xinge You. Egans: Evolutionary generative adversarial
+network search for zero-shot learning.IEEE Transactions on
+Evolutionary Computation, 28(3):582–596, 2023. 2, 6
+[12] Shiming Chen, Wenjin Hou, Ziming Hong, Xiaohan Ding,
+Yibing Song, Xinge You, Tongliang Liu, and Kun Zhang.
+Evolving semantic prototype improves generative zero-shot
+learning.arXiv preprint arXiv:2306.06931, 2023. 1, 2, 5, 6
+[13] Shuhuang Chen, Dingjie Fu, Shiming Chen, Wenjin Hou,
+Xinge You, et al. Causal visual-semantic correlation for zero-
+shot learning. InACM Multimedia 2024, 2024. 2, 6
+[14] Shiming Chen, Wenjin Hou, Salman Khan, and Fahad Shah-
+baz Khan. Progressive semantic-guided vision transformer
+for zero-shot learning. InProceedings of the IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition, pages
+23964–23974, 2024. 2, 6
+[15] Shuhuang Chen, Shiming Chen, Ziming Hong, Yuanjie
+Shao, and Xinge You. Dynamic semantic complemen-
+tary network for zero-shot learning.IEEE Transactions on
+Emerging Topics in Computational Intelligence, 2025. 2
+[16] Shiming Chen, Dingjie Fu, Salman Khan, and Fa-
+had Shahbaz Khan. Genzsl: Generative zero-shot learn-
+ing via inductive variational autoencoder.arXiv preprint
+arXiv:2505.11882, 2025. 1, 2
+[17] Shiming Chen, Ziming Hong, Xinge You, and Ling Shao.
+Semantics-conditioned generative zero-shot learning via fea-
+ture refinement.International Journal of Computer Vision,
+pages 1–18, 2025. 1, 2, 6
+[18] Zhuo Chen, Yufeng Huang, Jiaoyan Chen, Yuxia Geng, Wen
+Zhang, Yin Fang, Jeff Z Pan, and Huajun Chen. Duet: Cross-
+modal semantic grounding for contrastive zero-shot learning.
+InProceedings of the AAAI Conference on Artificial Intelli-
+gence, pages 405–413, 2023. 2, 6
+[19] Zhi Chen, Pengfei Zhang, Jingjing Li, Sen Wang, and Zi
+Huang. Zero-shot learning by harnessing adversarial sam-
+ples. InProceedings of the 31st ACM International Confer-
+ence on Multimedia, pages 4138–4146, 2023. 2, 6
+[20] Anders Christensen, Massimiliano Mancini, A Koepke, Ole
+Winther, and Zeynep Akata. Image-free classifier injection
+for zero-shot classification. InProceedings of the IEEE/CVF
+International Conference on Computer Vision, pages 19072–
+19081, 2023. 6
+[21] Kevin Clark and Priyank Jaini. Text-to-image diffusion mod-
+els are zero shot classifiers.Advances in Neural Information
+Processing Systems, 36:58921–58937, 2023. 1
+[22] Bowen Duan, Shiming Chen, Yufei Guo, Guo-Sen Xie,
+Weiping Ding, and Yisong Wang. Visual–semantic graph
+matching net for zero-shot learning.IEEE Transactions on
+Neural Networks and Learning Systems, 2024. 2
+[23] Rafael Felix, Ian Reid, Gustavo Carneiro, et al. Multi-
+modal cycle-consistent generalized zero-shot learning. In
+Proceedings of the European Conference on Computer Vi-
+sion (ECCV), pages 21–37, 2018. 2
+[24] Yaogong Feng, Xiaowen Huang, Pengbo Yang, Jian Yu, and
+Jitao Sang. Non-generative generalized zero-shot learning
+via task-correlated disentanglement and controllable samples
+synthesis. InProceedings of the IEEE/CVF conference on
+computer vision and pattern recognition, pages 9346–9355,
+2022. 2, 6
+[25] Dingjie Fu, Wenjin Hou, Shiming Chen, Shuhuang Chen,
+Xinge You, Salman Khan, and Fahad Shahbaz Khan. Dis-
+criminative image generation with diffusion models for zero-
+shot learning.arXiv preprint arXiv:2412.17219, 2024. 1, 2
+[26] Majid Ghasemi, Amir Hossein Moosavi, and Dariush
+Ebrahimi. A comprehensive survey of reinforcement learn-
+5507
+
+
+=== PAGE 10 ===
+ing: From algorithms to practical challenges.arXiv preprint
+arXiv:2411.18892, 2024. 3
+[27] Ian Goodfellow, Jean Pouget-Abadie, Mehdi Mirza, Bing
+Xu, David Warde-Farley, Sherjil Ozair, Aaron Courville, and
+Yoshua Bengio. Generative adversarial nets.Advances in
+neural information processing systems, 27, 2014. 1
+[28] Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song,
+Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi
+Wang, Xiao Bi, et al. Deepseek-r1: Incentivizing reasoning
+capability in llms via reinforcement learning.arXiv preprint
+arXiv:2501.12948, 2025. 3, 5
+[29] Zongyan Han, Zhenyong Fu, Shuo Chen, and Jian Yang.
+Contrastive embedding for generalized zero-shot learning.
+InProceedings of the IEEE Conference on Computer Vision
+and Pattern Recognition, pages 2371–2381, 2021. 2, 6
+[30] Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising dif-
+fusion probabilistic models.Advances in neural information
+processing systems, 33:6840–6851, 2020. 1
+[31] Hanbin Hong, Shenao Yan, Shuya Feng, Yan Yan, and
+Yuan Hong. Galot: Generative active learning via opti-
+mizable zero-shot text-to-image generation.arXiv preprint
+arXiv:2412.16227, 2024. 1
+[32] Ziming Hong, Shiming Chen, G Xie, Wenhan Yang, Jian
+Zhao, Yuanjie Shao, Qinmu Peng, and Xinge You. Seman-
+tic compression embedding for generative zero-shot learn-
+ing.IJCAI, Vienna, Austria, 7:956–963, 2022. 1, 2, 6
+[33] Wenjin Hou, Shiming Chen, Shuhuang Chen, Ziming Hong,
+Yan Wang, Xuetao Feng, Salman Khan, Fahad Shahbaz
+Khan, and Xinge You. Visual-augmented dynamic semantic
+prototype for generative zero-shot learning. InCVPR, pages
+23627–23637, 2024. 1, 2, 5, 6
+[34] Wenjin Hou, Dingjie Fu, Kun Li, Shiming Chen, Hehe Fan,
+and Yi Yang. Zeromamba: Exploring visual state space
+model for zero-shot learning.AAAI, 2025. 1, 2, 6
+[35] Dat Huynh and Ehsan Elhamifar. Fine-grained generalized
+zero-shot learning via dense attribute-based attention. In
+Proceedings of the IEEE/CVF conference on computer vi-
+sion and pattern recognition, pages 4483–4493, 2020. 2
+[36] Aaron Jaech, Adam Kalai, Adam Lerer, Adam Richard-
+son, Ahmed El-Kishky, Aiden Low, Alec Helyar, Aleksander
+Madry, Alex Beutel, Alex Carney, et al. Openai o1 system
+card.arXiv preprint arXiv:2412.16720, 2024. 3
+[37] Huajie Jiang, Zhengxian Li, Xiaohan Yu, Yongli Hu, Bao-
+cai Yin, Jian Yang, and Yuankai Qi. Visual and semantic
+prompt collaboration for generalized zero-shot learning. In
+Proceedings of the Computer Vision and Pattern Recognition
+Conference, pages 20275–20285, 2025. 2, 6
+[38] Diederik P Kingma and Jimmy Ba. Adam: A method for
+stochastic optimization.arXiv:1412.6980, 2014. 6
+[39] Diederik P Kingma and Max Welling. Auto-encoding varia-
+tional bayes.arXiv preprint arXiv:1312.6114, 2013. 1
+[40] Xia Kong, Zuodong Gao, Xiaofan Li, Ming Hong, Jun Liu,
+Chengjie Wang, Yuan Xie, and Yanyun Qu. En-compactness:
+Self-distillation embedding & contrastive generation for gen-
+eralized zero-shot learning. InProceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition,
+pages 9306–9315, 2022. 1, 2, 6
+[41] Komal Kumar, Tajamul Ashraf, Omkar Thawakar,
+Rao Muhammad Anwer, Hisham Cholakkal, Mubarak
+Shah, Ming-Hsuan Yang, Phillip HS Torr, Fahad Shahbaz
+Khan, and Salman Khan. Llm post-training: A deep dive
+into reasoning large language models.arXiv preprint
+arXiv:2502.21321, 2025. 3
+[42] Soyeong Kwon, Taegyeong Lee, and Taehwan Kim. Zero-
+shot text-guided infinite image synthesis with llm guidance.
+arXiv preprint arXiv:2407.12642, 2024. 1
+[43] Hugo Larochelle, Dumitru Erhan, and Yoshua Bengio. Zero-
+data learning of new tasks. InAAAI, page 3, 2008. 2
+[44] Jingjing Li, Mengmeng Jing, Ke Lu, Zhengming Ding, Lei
+Zhu, and Zi Huang. Leveraging the invariant side of gener-
+ative zero-shot learning. InProceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition,
+pages 7402–7411, 2019. 2
+[45] Ming Li, Huazhu Fu, Shengfeng He, Hehe Fan, Jun Liu,
+Jussi Keppo, and Mike Zheng Shou. Dr-fer: Discrimina-
+tive and robust representation learning for facial expression
+recognition.IEEE Transactions on Multimedia, 26:6297–
+6309, 2023. 1
+[46] Xiaofan Li, Yachao Zhang, Shiran Bian, Yanyun Qu, Yuan
+Xie, Zhongchao Shi, and Jianping Fan. Vs-boost: Boosting
+visual-semantic association for generalized zero-shot learn-
+ing. InIJCAI, pages 1107–1115, 2023. 1
+[47] Yapeng Li, Yong Luo, Zengmao Wang, and Bo Du. Im-
+proving generalized zero-shot learning by exploring the di-
+verse semantics from external class names. InProceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 23344–23353, 2024. 6
+[48] Man Liu, Feng Li, Chunjie Zhang, Yunchao Wei, Huihui Bai,
+and Yao Zhao. Progressive semantic-visual mutual adap-
+tion for generalized zero-shot learning. InProceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 15337–15346, 2023. 2
+[49] Man Liu, Huihui Bai, Feng Li, Chunjie Zhang, Yunchao Wei,
+Meng Wang, Tat-Seng Chua, and Yao Zhao. Psvma+: Ex-
+ploring multi-granularity semantic-visual adaption for gen-
+eralized zero-shot learning.IEEE Transactions on Pattern
+Analysis and Machine Intelligence, 2024. 2, 6
+[50] Man Liu, Huihui Bai, Feng Li, Chunjie Zhang, Yunchao
+Wei, Tat-Seng Chua, and Yao Zhao. Attend and enrich: En-
+hanced visual prompt for zero-shot learning. InProceed-
+ings of the AAAI Conference on Artificial Intelligence, pages
+5504–5512, 2025. 2, 6
+[51] Mingjie Liu, Shizhe Diao, Ximing Lu, Jian Hu, Xin Dong,
+Yejin Choi, Jan Kautz, and Yi Dong. Prorl: Prolonged re-
+inforcement learning expands reasoning boundaries in large
+language models.arXiv preprint arXiv:2505.24864, 2025. 3
+[52] Ziyu Liu, Zeyi Sun, Yuhang Zang, Xiaoyi Dong, Yuhang
+Cao, Haodong Duan, Dahua Lin, and Jiaqi Wang. Visual-rft:
+Visual reinforcement fine-tuning.arXiv:2503.01785, 2025.
+2, 3
+[53] Muhammad Ferjad Naeem, Yongqin Xian, Luc V Gool, and
+Federico Tombari. I2dformer: Learning image to document
+attention for zero-shot image classification.Advances in
+Neural Information Processing Systems, 35:12283–12294,
+2022. 1
+5508
+
+
+=== PAGE 11 ===
+[54] Muhammad Ferjad Naeem, Muhammad Gul Zain Ali Khan,
+Yongqin Xian, Muhammad Zeshan Afzal, Didier Stricker,
+Luc Van Gool, and Federico Tombari. I2mvformer: Large
+language model generated multi-view document supervi-
+sion for zero-shot image classification. InProceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 15169–15179, 2023. 2
+[55] Muhammad Ferjad Naeem, Yongqin Xian, Luc Van Gool,
+and Federico Tombari. I2dformer+: Learning image to doc-
+ument summary attention for zero-shot image classification.
+IJCV, pages 1–17, 2024. 1, 2, 6
+[56] Sanath Narayan, Akshita Gupta, Fahad Shahbaz Khan,
+Cees GM Snoek, and Ling Shao. Latent embedding feed-
+back and discriminative features for zero-shot classification.
+InEuropean Conference on Computer Vision, pages 479–
+495. Springer, 2020. 1, 2
+[57] Maxime Oquab, Timoth ´ee Darcet, Th ´eo Moutakanni, Huy
+V o, Marc Szafraniec, Vasil Khalidov, Pierre Fernandez,
+Daniel Haziza, Francisco Massa, Alaaeldin El-Nouby, et al.
+Dinov2: Learning robust visual features without supervision.
+arXiv preprint arXiv:2304.07193, 2023. 6
+[58] Mark Palatucci, Dean Pomerleau, Geoffrey E Hinton, and
+Tom M Mitchell. Zero-shot learning with semantic output
+codes.Advances in neural information processing systems,
+22, 2009. 2
+[59] Genevieve Patterson and James Hays. Sun attribute database:
+Discovering, annotating, and recognizing scene attributes.
+In2012 IEEE Conference on Computer Vision and Pattern
+Recognition, pages 2751–2758. IEEE, 2012. 5
+[60] Hongyu Qu, Jianan Wei, Xiangbo Shu, and Wenguan
+Wang. Learning clustering-based prototypes for composi-
+tional zero-shot learning.arXiv:2502.06501, 2025. 4
+[61] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya
+Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry,
+Amanda Askell, Pamela Mishkin, Jack Clark, et al. Learning
+transferable visual models from natural language supervi-
+sion. InInternational conference on machine learning, pages
+8748–8763. PMLR, 2021. 1, 6, 7
+[62] Ashish Kumar Shakya, Gopinatha Pillai, and Sohom
+Chakrabarty. Reinforcement learning algorithms: A brief
+survey.Expert Systems with Applications, 231:120495,
+2023. 2
+[63] Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao
+Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li,
+Yang Wu, et al. Deepseekmath: Pushing the limits of math-
+ematical reasoning in open language models.arXiv preprint
+arXiv:2402.03300, 2024. 3
+[64] Yufei Shi, Weilong Yan, Gang Xu, Yumeng Li, Yucheng
+Chen, Zhenxi Li, Fei Yu, Ming Li, and Si Yong Yeo. Pvchat:
+Personalized video chat with one-shot learning. InProceed-
+ings of the IEEE/CVF International Conference on Com-
+puter Vision (ICCV), pages 23321–23331, 2025. 3
+[65] Yueqi Song, Tianyue Ou, Yibo Kong, Zecheng Li, Graham
+Neubig, and Xiang Yue. Visualpuzzles: Decoupling multi-
+modal reasoning evaluation from domain knowledge.arXiv
+preprint arXiv:2504.10342, 2025. 3
+[66] Hongzu Su, Jingjing Li, Ke Lu, Lei Zhu, and Heng Tao
+Shen. Dual-aligned feature confusion alleviation for gen-
+eralized zero-shot learning.IEEE Transactions on Circuits
+and Systems for Video Technology, 33:3774–3785, 2023. 2
+[67] Songbai Tan, Xuerui Qiu, Yao Shu, Gang Xu, Linrui
+Xu, Xiangyu Xu, Huiping Zhuang, Ming Li, and Fei Yu.
+WMarkGPT: Watermarked image understanding via multi-
+modal large language models. InProceedings of the 42nd In-
+ternational Conference on Machine Learning, pages 58621–
+58636. PMLR, 2025. 3
+[68] Laurens Van der Maaten and Geoffrey Hinton. Visualizing
+data using t-sne.Journal of machine learning research, 9
+(11), 2008. 8
+[69] Maunil R Vyas, Hemanth Venkateswara, and Sethuraman
+Panchanathan. Leveraging seen and unseen semantic re-
+lationships for generative zero-shot learning. InEuropean
+Conference on Computer Vision, pages 70–86. Springer,
+2020. 2
+[70] Chaoqun Wang, Shaobo Min, Xuejin Chen, Xiaoyan Sun,
+and Houqiang Li. Dual progressive prototype network for
+generalized zero-shot learning.Advances in Neural Infor-
+mation Processing Systems, 34:2936–2948, 2021. 2
+[71] Peng Wang, Shuai Bai, Sinan Tan, Shijie Wang, Zhihao Fan,
+Jinze Bai, Keqin Chen, Xuejing Liu, Jialin Wang, Wenbin
+Ge, et al. Qwen2-vl: Enhancing vision-language model’s
+perception of the world at any resolution.arXiv preprint
+arXiv:2409.12191, 2024. 3
+[72] Weiyun Wang, Zhangwei Gao, Lixin Gu, Hengjun Pu, Long
+Cui, Xingguang Wei, Zhaoyang Liu, Linglin Jing, Shenglong
+Ye, Jie Shao, et al. Internvl3. 5: Advancing open-source
+multimodal models in versatility, reasoning, and efficiency.
+arXiv preprint arXiv:2508.18265, 2025. 3
+[73] Zhengbo Wang, Jian Liang, Ran He, Nan Xu, Zilei Wang,
+and Tieniu Tan. Improving zero-shot generalization for clip
+with synthesized prompts. InProceedings of the IEEE/CVF
+International Conference on Computer Vision, pages 3032–
+3042, 2023. 1, 6
+[74] P. Welinder, S. Branson, T. Mita, C. Wah, Florian Schroff,
+Serge J. Belongie, and P. Perona. Caltech-ucsd birds 200.
+Technical Report CNS-TR-2010-001, Caltech,, 2010. 5
+[75] Yongqin Xian, Tobias Lorenz, Bernt Schiele, and Zeynep
+Akata. Feature generating networks for zero-shot learning.
+InProceedings of the IEEE conference on computer vision
+and pattern recognition, pages 5542–5551, 2018. 1, 2
+[76] Yongqin Xian, Saurabh Sharma, Bernt Schiele, and Zeynep
+Akata. f-vaegan-d2: A feature generating framework for
+any-shot learning. InProceedings of the IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition, pages
+10275–10284, 2019. 1, 5
+[77] Yongli Xiang, Ziming Hong, Zhaoqing Wang, Xiangyu
+Zhao, Bo Han, and Tongliang Liu. When safety collides:
+Resolving multi-category harmful conflicts in text-to-image
+diffusion via adaptive safety guidance.arXiv preprint, 2026.
+2
+[78] Zhisheng Xiao, Karsten Kreis, and Arash Vahdat. Tack-
+ling the generative learning trilemma with denoising diffu-
+sion gans.arXiv preprint arXiv:2112.07804, 2021. 4
+[79] Guo-Sen Xie, Li Liu, Xiaobo Jin, Fan Zhu, Zheng Zhang,
+Jie Qin, Yazhou Yao, and Ling Shao. Attentive region em-
+bedding network for zero-shot learning. InProceedings of
+5509
+
+
+=== PAGE 12 ===
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 9384–9393, 2019. 2
+[80] Shusheng Xu, Wei Fu, Jiaxuan Gao, Wenjie Ye, Weilin Liu,
+Zhiyu Mei, Guangju Wang, Chao Yu, and Yi Wu. Is dpo
+superior to ppo for llm alignment? a comprehensive study.
+arXiv preprint arXiv:2404.10719, 2024. 3
+[81] Wenjia Xu, Yongqin Xian, Jiuniu Wang, Bernt Schiele, and
+Zeynep Akata. Attribute prototype network for any-shot
+learning.IJCV, 130(7):1735–1753, 2022. 2
+[82] Wenjia Xu, Yongqin Xian, Jiuniu Wang, Bernt Schiele, and
+Zeynep Akata. Vgse: Visually-grounded semantic em-
+beddings for zero-shot learning. InProceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 9316–9325, 2022. 6
+[83] Yi Xu, Chengzu Li, Han Zhou, Xingchen Wan, Caiqi Zhang,
+Anna Korhonen, and Ivan Vuli´c. Visual planning: Let’s think
+only with images.arXiv preprint arXiv:2505.11409, 2025. 3
+[84] Caixia Yan, Xiaojun Chang, Zhihui Li, Weili Guan,
+Zongyuan Ge, Lei Zhu, and Qinghua Zheng. Zeronas: Dif-
+ferentiable generative adversarial networks search for zero-
+shot learning.IEEE transactions on pattern analysis and
+machine intelligence, 2021. 1, 2, 6
+[85] An Yang, Anfeng Li, Baosong Yang, Beichen Zhang,
+Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao, Chengen
+Huang, Chenxu Lv, et al. Qwen3 technical report.arXiv
+preprint arXiv:2505.09388, 2025. 3
+[86] Zihan Ye, Guanyu Yang, Xiaobo Jin, Youfa Liu, and Kaizhu
+Huang. Rebalanced zero-shot learning.IEEE Transactions
+on Image Processing, 32:4185–4198, 2023. 2
+[87] Zihan Ye, Shreyank N Gowda, Shiming Chen, Xiaowei
+Huang, Haotian Xu, Fahad Shahbaz Khan, Yaochu Jin,
+Kaizhu Huang, and Xiaobo Jin. Zerodiff: Solidified visual-
+semantic correlation in zero-shot learning. InThe Thir-
+teenth International Conference on Learning Representa-
+tions, 2025. 1, 2, 4
+[88] Bowen Zheng, Yongli Xiang, Ziming Hong, Zerong Lin,
+Chaojian Yu, Tongliang Liu, and Xinge You. Vii: Visual
+instruction injection for jailbreaking image-to-video genera-
+tion models.arXiv preprint, 2026. 2
+5510

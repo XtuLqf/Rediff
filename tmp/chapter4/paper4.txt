@@ -1,0 +1,2528 @@
+
+=== PAGE 1 ===
+1
+ZeroDiff++: Generative Test-Time Adaptation for
+Zero-shot Learning
+Zihan Ye, Member, IEEE, Shreyank N Gowda, Kaile Du, Weijian Luo, Ling Shao †, Fellow, IEEE
+Abstract—Zero-shot Learning (ZSL) enables classifiers to
+recognize classes unseen during training, commonly via generative
+two stage methods: (1) learn visual semantic correlations from
+seen classes; (2) synthesize unseen class features from semantics
+to train classifiers. In this paper, we identify spurious visual
+semantic correlations in existing generative ZSL worsened by
+scarce seen class samples and introduce two metrics to quantify
+spuriousness for seen and unseen classes. Furthermore, we point
+out a more critical bottleneck: existing unadaptive fully noised
+generators produce features disconnected from real test samples,
+which also leads to the spurious correlation. To enhance the visual-
+semantic correlations on both seen and unseen classes, we propose
+ZeroDiff++, a diffusion-based generative framework. In training,
+ZeroDiff++ uses (i) diffusion augmentation to produce diverse
+noised samples, (ii) supervised contrastive (SC) representations
+for instance level semantics, and (iii) multi-view discriminators
+with Wasserstein mutual learning to assess generated features.
+At generation time, we introduce (iv) Diffusion-based Test time
+Adaptation (DiffTTA) to adapt the generator using pseudo label
+reconstruction, and (v) Diffusion-based Test time Generation
+(DiffGen) to trace the diffusion denoising path and produce
+partially synthesized features that connect real and generated
+data, and mitigates data scarcity further. Extensive experiments
+on three ZSL benchmarks demonstrate that ZeroDiff++ not only
+achieves significant improvements over existing ZSL methods but
+also maintains robust performance even with scarce training data.
+Code would be available.
+Index Terms—Zero-shot Learning, Generative Model, Diffusion
+Model, Generative Adversarial Model, Visual-language Learning.
+I. I NTRODUCTION
+With the rapid development of machine learning, image
+recognition models have achieved unprecedented success,
+largely due to the availability of abundant labeled samples.
+However, collecting extensive labeled datasets is often time-
+consuming and expensive, making it unrealistic to assume
+access to substantial volumes of labeled data. To improve
+data efficiency for new classes, zero-shot learning (ZSL) [2]
+offers a promising solution by transferring knowledge from
+seen classes to unseen classes through the use of pre-defined
+class semantic knowledge, such as attributes [3] and text-based
+representations [4], [5].
+Conventional ZSL methods usually learn a visual-to-semantic
+embedding [6], a semantic-to-visual embedding [7], or an
+†: Corresponding author: Ling Shao (ling.shao@ieee.org).
+Zihan Ye and Ling Shao are the School of Engineering Science, University of
+Chinese Academy of Sciences, Beijing 100049, China.
+Shreyank N Gowda is with the School of Computer Science, the University
+of Nottingham, NG8 1BB Nottingham, UK.
+Kaile Du is with the Southeast University, Nanjing 210096, China.
+Weijian Luo is with the hi-lab of Xiaohongshu Inc, Beijing, China.
+unified embedding space [8]. However, since only training
+samples of the seen class are available, such embedding
+methods inevitably tend to lean towards the seen class. Under
+the more challenging Generalized ZSL (GZSL) task [3], in
+which the model needs to classify samples of both seen
+and unseen classes simultaneously, the performance of the
+embedding method deteriorates. This will make the embedding
+ZSL methods prone to misclassifying the unseen class images
+into seen classes and reduce the overall accuracy.
+In contrast, to alleviate the biased prediction issue mentioned
+above, recent works try to utilize generative models to syn-
+thesize pseudo features of unseen classes, hence known as
+generative ZSL methods. These methods typically leverage
+some form of adaptations of generative adversarial networks
+(GANs) [9]–[11] to aid the feature generation. Such a generic
+two-stage framework is wide-used: (S-1) Generative Model
+Training: Training generative models to synthesize visual
+features from class semantics (i.e., the correlations between
+visual features and class semantics) on seen classes; (S-2)
+Unseen Class Generating: Then, freezing generative models
+to generate visual features of unseen classes by their semantics,
+and training an unseen class classifier by generated unseen
+class features.
+In this paper, despite fast advances in ZSL, we point out
+that existing generative ZSL methods are limited by spurious
+correlations on both seen and unseen classes , as shown in
+Fig. 1 (a). Specifically, for seen correlations, existing generative
+methods generally presume that there is a substantial number
+of samples available for seen classes to train generative models.
+Only a few ZSL methods consider the data-limited ZSL [12],
+[13]. Through empirical investigations, we observe that most
+existing generative ZSL methods suffer from performance
+degradation and collapsed generation modes as the number
+of training samples is gradually reduced. A more detailed
+illustration is in Fig. 2(a). We re-split the real seen class
+samples into two groups: one for training and the other for
+validating the correlation. We then feed the visual features of
+the split samples into the GAN discriminator to obtain critic
+scores (i.e., the output of the discriminator), which indicate
+whether the discriminator perceives the input features as real or
+fake with respect to the class semantics. Next, we calculate the
+difference in critic scores as a measure to determine whether the
+learned visual-semantic correlation is spurious or substantial.
+Our observations reveal that as the number of training samples
+decreases, the critic score difference becomes increasingly
+larger, suggesting that the generative models perceive the
+validating seen class samples as progressively more ‘fake.’
+This phenomenon indicates that a limited number of training
+This article has been accepted for publication in IEEE Transactions on Pattern Analysis and Machine Intelligence. This is the author's version which has not been fully edited and 
+content may change prior to final publication. Citation information: DOI 10.1109/TPAMI.2026.3728839
+© 2026 IEEE. All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies. Personal use is permitted,
+but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+Authorized licensed use limited to: XiangTan University. Downloaded on October 21,2026 at 02:50:31 UTC from IEEE Xplore.  Restrictions apply. 
+
+=== PAGE 2 ===
+2
+(b) ZeroDiff
+Spurious seen
+vision-semantic correlation
+(a) Traditional GAN-based ZSL (c) ZeroDiff++
+Spurious unseen
+vision-semantic correlation
+Spurious unseen
+vision-semantic correlation
+Substantial seen
+vision-semantic correlation
+Substantial unseen
+vision-semantic correlation
+Seen  
+semantic
+Unseen 
+semantic
+Training samples
+(limited)
+Gaussian noises
+Seen  
+semantic
+Training samples
+(limited)
+Unseen 
+semantic
+Gaussian noises
+Unseen 
+semantic
+Testing samples
+Diffusion forward chain
+Substantial seen
+vision-semantic correlation
+Diffusion-based
+training
+Training samples
+(limited)
+Seen  
+semantic
+Diffusion forward chainDiffusion forward chain
+Diffusion forward 
+corruption
+Diffusion-based
+training
+Stage-2:
+Unseen Class 
+Generating
+Stage-1:
+Generative Model
+Training 
+Fig. 1: Overall motivation illustration. (a) Traditional GAN-based ZSL methods suffer from spurious visual-semantic correlation
+both for seen and unseen classes. (b) ZeroDiff [1] employs a diffusion mechanism on the training stage to obtain a substantial
+correlation on seen classes. (c) Our ZeroDiff++ further explores the diffusion forward chain for utilizing real testing samples,
+encouraging substantial visual-semantic correlation on unseen classes.
+samples amplifies the spurious seen visual-semantic correlation.
+On the other hand, in the generating stage, we can similarly
+use the discrimination gap to indicate the unseen correlation.
+However, since only the generator is involved in this stage and
+out-of-distribution behavior also might exhibited by the seen-
+class discriminators, the significance of the discrimination gap
+is reduced. Thus, we further point out that a more critical factor
+is the lack of correlation between the generated samples and
+the real test samples, as shown in Figure 2 (b). One reason is
+that the generator is only trained on seen classes and therefore
+cannot adapt to unseen classes. Another reason is that existing
+methods typically sample noise from a Gaussian distribution
+and concatenate the sampled noise with the semantics of
+unseen classes to generate features for unseen classes. This
+generation phase, which uses the semantics of unseen classes
+as a generation condition, can generate unseen class features
+with good separability. However, good class separability does
+not guarantee that the generated features are consistent with
+the real features. Due to the lack of correlation between real
+and generated features, the generated features may still be
+inconsistent with the semantic information of unseen classes.
+To this end, we propose a novel ZSL framework mainly based
+on diffusion, which is named ZeroDiff++, for strengthening
+both seen and unseen vision-semantic correlation. An overall
+illustration is in Fig. 1 (c). Specifically, for seen correlation,
+three key insights are proposed on the training stage (Fig. 2(c)):
+(1) Diffusion augmentation : Limited training samples can be
+easily memorized by models. We incorporate the diffusion
+mechanism [14], [15] into our method, which allows a single
+clean sample to be augmented into an infinite number of
+noised samples by varying the noise-to-data ratios. (2) Dynamic
+semantics: Predefined semantics are static, meaning that class
+semantics remain the same across different instances. However,
+each limited sample may only represent part of the predefined
+semantics. For example, in the AW A2 dataset, all images of the
+‘fox’ class are labeled with the semantics ‘red’ and ‘white’, even
+though this is inaccurate for white foxes. To address this, we
+revisit the classical Supervised Contrastive (SC) loss [16] and
+suggest that SC-based representations can generate instance-
+level semantics for every sample, enhancing the generation of
+visual features. (3) Multi-view discriminating: We combine
+three types of discriminators to assess the authenticity of
+generated features from different perspectives: predefined
+semantics, the diffusion process, and SC-based representations.
+To integrate knowledge from all discriminators, we propose a
+mutual learning loss based on the Wasserstein distance, further
+reinforcing substantial correlations.
+Next, for the correlation on unseen classes, we are motivated
+by enhancing the connection between real and generated
+distributions, presenting two key insights on the generating
+stage (Fig. 2(d)): (4) Diffusion-based Test-time Adaption
+(DiffTTA): Since the generator only encountered seen cor-
+relations during the training stage, its generation of unseen
+features is inaccurate. At the unseen class generating stage,
+we use a pre-classifier to obtain the pseudo labels of testing
+samples, and propose a test-time adaptation (TTA) loss by
+feature reconstruction for stable adaptation. (5) Diffusion-
+based Test-time Generation (DiffGen): To further enhance the
+connection between real and generated unseen class features,
+we utilize the trained diffusion-based generator to trace the
+diffuse-denoise path of unseen class features with different
+noise ratios. Since the perturbed noises varied from fully noise
+to near-zero noise, the produced features can be seen as fully
+synthesized ( t = T ), partially synthesized ( 0 < t < T ), or
+fully reconstructed ( t = 0). Surprisingly, we find that partially
+synthesized features of unseen classes not only mitigate data
+scarcity further, but also allow us trace every synthesized feature
+to corresponding real features. Extensive experiments showcase
+that ZeroDiff++ achieves the new state-of-the-art on three ZSL
+benchmarks with various scales of training set.
+A preliminary version of this work was presented at a confer-
+ence, referred to as ZeroDiff [1] (cf Fig. 1(b)). In this paper,
+we further extend the robust visual-semantic correlation
+from seen classes to unseen classes . We summarize our
+extensions in four points: i) We extend the discriminating metric
+from seen to unseen classes to reflect the unseen correlation,
+This article has been accepted for publication in IEEE Transactions on Pattern Analysis and Machine Intelligence. This is the author's version which has not been fully edited and 
+content may change prior to final publication. Citation information: DOI 10.1109/TPAMI.2026.3728839
+© 2026 IEEE. All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies. Personal use is permitted,
+but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+Authorized licensed use limited to: XiangTan University. Downloaded on October 21,2026 at 02:50:31 UTC from IEEE Xplore.  Restrictions apply. 
+
+=== PAGE 3 ===
+3
+Real seen class features 
+in training set
+Real seen class features 
+but not in training set
+“It is fake
+ ”
+“It is real
+ ”
+“It is real
+ ”
+“It is real
+ ”
+Mutual
+learning
+M2. Dynamic semanticsM1. Diffusion augmentation M3. Multi-view discriminating
+(a) Three Problems Cause Spurious Seen Vision-Semantic Correlation
+(c) Three Motivations Cause Substantial Seen Vision-Semantic Correlation
+Class: fox
+‘Paws’
+‘Furry’
+‘White’
+‘Red’
+Corresponding
+image Pre-defined semantics
+Validating seen class correlation
+Mismatched semantics
+Class: fox
+‘Paws’
+‘Furry’
+‘White’
+‘Red’
+Corresponding
+image
+Diffusion 
+forward chain
+Infinite noised features
+SC-based representations
+Validating seen class correlation
+Single feature
+discriminator
+Class: fox
+‘Paws’
+‘Furry’
+‘White’
+‘Red’
+Training seen class correlation
+Mismatched semantics
+Corresponding
+image Pre-defined semantics
+Class: fox
+‘Paws’
+‘Furry’
+‘White’
+‘Red’
+Training seen class correlation
+Diffusion 
+forward chain
+Corresponding
+image SC-based representations
+Infinite noised features
+Clean real seen 
+class features
+Real seen class features 
+in training set
+Real seen class features 
+but not in training set
+Clean real visual
+feature distribution
+P2. Static semanticsP1. Limited data P3. Single-view discriminating
+Spurious seen
+vision-semantic correlation
+Substantial seen
+vision-semantic correlation
+Clean real unseen 
+class features
+(b) Two Problems Cause Spurious Unseen Vision-Semantic Correlation
+Spurious unseen
+vision-semantic correlation
+Gaussian Noises
+Class: pig
+‘Tails’
+‘Hooves’
+‘White’
+‘Big’
+Testing unseen class correlation
+No corresponding
+image Pre-defined semantics
+Substantial unseen
+vision-semantic correlation
+?
+Class: pig
+‘Tails’
+‘Hooves’
+‘White’
+‘Big’
+Testing unseen class correlation
+Corresponding
+image Pre-defined semantics
+Feature
+generator
+P4. Non-adaptive generator
+P5. Fully-noised generating
+(d) Two Motivations Cause Substantial Unseen Vision-Semantic Correlation
+Clean real unseen 
+class features
+Class: pig
+‘Big’
+‘Hooves’
+‘White’
+‘Tails’
+Testing unseen class correlation
+Corresponding
+image
+Feature
+generator
+M4. Adaptive generator (DiffTTA)
+M5. Partial-feature generating (DiffGen)
+SC-based representations
+Diffusion 
+forward chain
+Training 
+correlation
+Feature generator
+(frozen)
+Diffusion 
+forward chain
+Diffusion 
+forward chain
+Input Denoising
+Only can 
+recall
+Input Denoising
+Feature generator
+(frozen)
+Generated 
+features
+Gaussian 
+noises
+Mutual
+learning
+Single feature
+discriminator
+Class collapse gradually
+Learned from
+100% training set
+Succeeds consistently, closer 
+to real distribution 
+Generated feature (2 unseen classes)
+Keep class separation, but still have 
+large gap to real distribution
+ZeroDiff
+f-V AEGAN
+ZeroDiff++
+Learned from
+30% training set
+Learned from
+10% training set
+Learned from
+100% training set
+Learned from
+30% training set
+Learned from
+10% training set
+Learned from
+100% training set
+Learned from
+30% training set
+Learned from
+10% training set
+Real feature (2 unseen classes)
+Generated feature (2 unseen classes)
+Real feature (2 unseen classes)
+Generated feature (2 unseen classes)
+Real feature (2 unseen classes)
+Fig. 2: Detailed motivation Illustration. (a) In the training stage, three problems lead to the standard GAN-based ZSL approaches
+obtaining spurious seen correlation: over-fitting to limited data, mismatched static pre-defined semantics, and single-view
+discriminating. (b) In the generating stage, two problems corrupt unseen correlation: an unadaptive generator and fully-noised
+generation. Finally, spurious seen and unseen correlations lead to feature generation failing gradually. (c) In contrast, our
+ZeroDiff++ overcomes these shortcomings using three motivations in the training stage for seen correlation: diffusion-augmented
+infinite features, dynamic SC-based representations, and multi-view discriminating. (d) Two motivations in the generating stage
+are for unseen correlation: diffusion-based test-time adaptation and generating. Finally, substantial correlations on both seen and
+unseen classes allow ZeroDiff++ to keep a robust performance with even 10% training set.
+This article has been accepted for publication in IEEE Transactions on Pattern Analysis and Machine Intelligence. This is the author's version which has not been fully edited and 
+content may change prior to final publication. Citation information: DOI 10.1109/TPAMI.2026.3728839
+© 2026 IEEE. All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies. Personal use is permitted,
+but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+Authorized licensed use limited to: XiangTan University. Downloaded on October 21,2026 at 02:50:31 UTC from IEEE Xplore.  Restrictions apply. 
+
+=== PAGE 4 ===
+4
+and point out a more crucial issue is the disconnection
+between generated and real features. ii) We extend the diffusion
+mechanism into generating stage. We propose DiffTTA with
+pseudo labels to adapt the generator by feature reconstruction
+and DiffGen to partially synthesize unseen class features,
+allowing us to trace the feature generation process and further
+mitigate the data-scarce ZSL. iii) More importantly, although
+previous work [17], [18] also discussed that diffusion-based
+discriminators can alleviate the overfitting of GAN, this work
+is the first to theoretically prove it. iv) We also conduct
+a fair comparison with the previous diffusion-based ZSL
+method diffusionZSL [19] that directly classifies samples by
+the reconstruction errors of a trained diffusion generator. The
+experimental results in Sec. IV-E show that this method still
+exhibits significant classification bias and is not better than
+traditional generative zero-shot learning methods.
+To summarize, our contributions are as follows:
+• We reveal and quantify the spurious visual-semantic
+correlation problem, and empirically demonstrate that the
+problem would be amplified by fewer training samples,
+and propose a novel generative ZSL framework, ZeroD-
+iff++, that advances more efficient ZSL in scenarios with
+limited seen class samples.
+• We propose three train-time insights to strengthen the
+seen visual-semantic correlation, which are diffusion
+augmentation, dynamic representation of limited samples,
+and multi-view discrimination.
+• We also propose two test-time insights for unseen corre-
+lation enhancement, which are DiffTTA that reconstructs
+unseen features to adapt and DiffGen that injects partially
+real features into fake features with different diffusion
+ratios.
+• We theoretically demonstrated for the first time that
+diffusion-based discriminators can alleviate overfitting
+of GANs.
+• We introduce a new protocol to evaluate generative ZSL
+methods under varying data conditions. Experimental re-
+sults show that ZeroDiff++ outperforms various generative
+models across different amounts of training samples.
+II. R ELATED WORK
+A. Zero-shot Learning
+ZSL is a research area focused on class-level generalizabil-
+ity [2]. The primary approaches to ZSL can be categorized into
+embedding and generative methods. Embedding methods [20]–
+[24] learn a direct mapping from visual to semantic spaces
+or vice versa. For example, TransZero++ [25] presents a
+cross-modal transformer-based architecture to ZSL. However,
+when training samples are limited, embedding methods often
+underperform compared to generative methods on smaller
+datasets [23], [24]. In contrast, generative ZSL methods use
+various generative models [26] to synthesize visual features for
+unseen classes and then train a final classifier for these classes.
+This paper distinguishes itself from previous works in five
+key aspects: (1) Recent generative ZSL methods have also
+identified incorrect visual-semantic correlations [27], [28], but
+they lack in-depth quantitative analysis. In contrast, we verify
+this issue using discriminator scores and demonstrate that the
+problem is exacerbated by a limited number of training samples.
+(2) Some ZSL works [29]–[31] combine GANs and V AEs to
+address the well-known mode collapse issue [32]. However,
+we show that V AEGAN-based methods still experience mode
+collapse when the training set is reduced. As a solution, we
+propose integrating the diffusion mechanism [33] to mitigate
+this problem and a Wasserstein-distance-based mutual learning
+approach to distill knowledge across multiple discriminators.
+(3) To address the limited discriminative power of predefined
+semantics, recent works propose dynamically updating these
+semantics, like DSP [34] and V ADS [11]. Our approach
+revisits the classical SC learning [16] and argues that SC-based
+representations can serve as a new source for instance-level
+semantics due to their high intra-class variation [35]. (4) As
+far as we know, this work is the first to explore the techniques
+on test-time among generative ZSL methods. Our proposed
+DiffTTA and DiffGen could reinforce the unseen visual-
+semantic correlation, further mitigating the scarce training
+sample problem. (5) Recent studies [19], [36], [37] have shown
+that specific large-scale diffusion models, like Stable Diffusion,
+also possess zero-shot classification abilities. For example,
+diffusionZSL [19] reconstructs unseen images by using the
+semantics of all categories and selects the category with the
+smallest error to zero-shot classify. However, they do not strictly
+ensure that unseen classes are excluded from training and rely
+on large-scale models with huge parameters and extensive
+training sets. In contrast, our interpretation of diffusion stays
+true to its core principle: a generative paradigm that learns data
+distributions by denoising noised data. More importantly, our
+method does not violate the ZSL premise [2]. Our experiment
+also demonstrated that ZeroDiff++ has better performance in
+unseen category classification, while diffusionZSL is inferior
+to traditional ZSL inference and still suffers from severe seen-
+unseen bias.
+B. Test-time Adaption
+Machine learning models often encounter test distributions
+that differ from the training distribution, leading to significant
+performance degradation. To mitigate this domain-shift prob-
+lem, TTA methods aim to improve model performance under
+distribution shifts by adapting models using unlabeled test
+data. Classical approaches include recalibrating normalization
+statistics [38], optimizing unsupervised objectives such as
+test entropy [39], or pseudo-labels [40], and adapting model
+parameters or classifier layers [41]. More recently, TTA has
+achieved remarkable success in supervised learning, vision-
+language models, few-shot learning, and continual learning.
+Representative methods such as TPT [42] and DiffTPT [43]
+demonstrate that test-time optimization can effectively improve
+model generalization under distribution shifts. Despite these
+advances, the application of TTA to generative models remains
+largely unexplored. Existing studies mainly employ generative
+models as auxiliary tools for distribution estimation or pseudo-
+sample generation during adaptation, rather than adapting the
+generative model itself at test time.
+To the best of our knowledge, ZeroDiff++ is the first work to
+introduce test-time adaptation into generative zero-shot learning.
+This article has been accepted for publication in IEEE Transactions on Pattern Analysis and Machine Intelligence. This is the author's version which has not been fully edited and 
+content may change prior to final publication. Citation information: DOI 10.1109/TPAMI.2026.3728839
+© 2026 IEEE. All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies. Personal use is permitted,
+but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+Authorized licensed use limited to: XiangTan University. Downloaded on October 21,2026 at 02:50:31 UTC from IEEE Xplore.  Restrictions apply. 
+
+=== PAGE 5 ===
+5
+Specifically, we make two key contributions. First, we propose
+DiffTTA, a diffusion-based test-time adaptation strategy that
+continuously adapts the feature generator toward the target
+unseen distribution using unlabeled test samples. Second, we
+introduce DiffGen, a test-time generation mechanism that
+progressively synthesizes more discriminative unseen-class
+features based on the adapted diffusion model. ZeroDiff++
+not only reduces the generative-real distribution gap for unseen
+classes, and provides a trackable generation trajectory. We hope
+this work offers new insights into the intersection of test-time
+adaptation and generative models.
+III. Z ERODIFF++
+We first build the notation system of the ZSL problem
+in Sec. III-A. Then, we present the spurious vision-semantic
+correlation in the existing method and our proposed metric
+in Sec. III-B. To solidify the visual-semantic correlation, we
+introduce the training stage of our ZeroDiff++ in Sec. III-C,
+including the three train-time insights and the generating stage
+in Sec. III-D with two test-time insights.
+A. Notations
+In the ZSL setting, there are two disjoint label sets: a seen
+set Y s used for training and an unseen set Y u used for testing,
+where Y s ∩ Y u = ∅. The training dataset is denoted as Dtr =
+{(xs, ys, as) | xs ∈ X s, ys ∈ Y s, as ∈ A s}, where X s, As,
+and Y s represent the image, semantic, and label spaces for the
+seen classes. The goal of ZSL is to use the training dataset
+Dtr to create a classifier that can classify unseen images in the
+testing dataset Dte = Du = {(xu, yu, au) | xu ∈ X u, yu ∈
+Y u, au ∈ A u}, i.e., fzsl : X u → Y u. In the Generalized
+ZSL (GZSL) task, images from seen classes must also be
+classified during testing. Therefore, a portion of the seen class
+samples is reserved for testing, denoted as Dte,s. In other
+words, the testing dataset becomes Dte = Dte,s ∪ Du, and the
+goal becomes fgzsl : X s ∪ X u → Y u ∪ Y s.
+B. Spurious Vision-Semantic Correlation
+Given an image xs from the training set Dtr, existing GAN-
+based ZSL works use a feature extractor F ∗
+ce pre-trained by
+Cross-Entropy (CE) loss to extract its visual features vs
+0 =
+F ∗
+ce(xs): LCE = −P|Y|
+i=1 yi log(byi). Then, a feature generator
+G takes class semantics as and latent variables z as inputs
+to synthesize class-specific sample features ˜vs
+0 = Gadv(as, z);
+and a discriminator Dadv is used to distinguish real features vs
+0
+from fake features ˜vs
+0 by predicting the Wasserstein distance
+Wadv between them according to predefined semantics as.
+Specifically, take the baseline f-V AEGAN as an example, its
+Dadv maximizes the following loss Ladv:
+Ladv = Wadv − λgpadv Lgpadv , (1)
+Wadv = E[Dadv(vs
+0, as)] − E[Dadv(˜vs
+0, as)], (2)
+Lgpadv = E[(∥∇ˆvs
+0 Dadv(ˆvs
+0, as)∥2 − 1)2], (3)
+AWA2 CUB SUN
+0 30025050 100 150 200
+∆𝑎𝑑𝑣
+𝑠
+Epoch Epoch Epoch0 30025050 100 150 200 0 30025050 100 150 200 400350
+1.50
+1.25
+1.00
+0.75
+0.50
+0.25
+0.00
+-0.25
+∆𝑎𝑑𝑣
+𝑠
+16
+2
+14
+12
+10
+8
+6
+4
+0 0
+10
+8
+6
+4
+2
+ ∆𝑎𝑑𝑣
+𝑠
+(a) The epoch-∆𝑎𝑑𝑣
+𝑠  curve indicating seen visual-semantic correlation in discriminator
+(b) The epoch-∆𝑎𝑑𝑣
+𝑢  curve indicating unseen visual-semantic correlation in discriminator
+∆𝑎𝑑𝑣
+𝑢
+∆𝑎𝑑𝑣
+𝑢
+∆𝑎𝑑𝑣
+𝑢
+AWA2 CUB SUN
+Epoch Epoch Epoch
+0
+-5
+-10
+5
+10
+5
+0
+-5
+10
+15
+4
+3
+2
+5
+6
+1
+-1
+0
+0 30025050 100 150 200 4003500 30025050 100 150 2000 30025050 100 150 200
+100%
+training set
+30%
+training set
+10%
+training set
+Fig. 3: The epoch-∆s
+adv and epoch-∆u
+adv curves of the classical
+f-V AEGAN [44]. Larger ∆s
+adv indicates Dadv thinks real
+testing seen examples are more fake, i.e., learns more spurious
+visual-semantic correlation on seen classes. Similarly, the epoch-
+∆u
+adv curve reveals the learned unseen correlation of Dadv.
+where ˆvs
+0 = αvs
+0 + (1 − α)˜vs
+0 with α ∼ U(0, 1), and λgpadv
+is a coefficient of the gradient penalty term Lgpadv [45] that
+aims to stabilize the training of GANs.
+Since a higher critic score means that discriminators consider
+the input data more ‘real’, we take the critic score difference
+between real training features vs
+0 and testing seen class features
+vte,s
+0 to indicate whether the learned seen vision-semantic
+correlation is spurious or substantial, i.e.,
+∆s
+adv(vs
+0, vte,s
+0 ) = Dadv(vs
+0, as) − Dadv(vte,s
+0 , ate,s). (4)
+Similarly, we can count the critic score difference between real
+training features vs
+0 and testing unseen class features vu
+0 to
+indicate the unseen correlation is spurious or substantial, i.e.,
+∆u
+adv(vs
+0, vte,s
+0 ) = Dadv(vs
+0, as) − Dadv(vu
+0 , au). (5)
+It is worth mentioning that while ∆s
+adv can quantify seen
+visual-semantic correlations by calculating the difference in
+discriminant scores for the seen classes, directly extending
+∆s
+adv to ∆u
+adv has some important limitations, as follows:
+1) Dadv is only used during generator training. Once the
+generator training is complete, it is discarded and will not
+participate in subsequent feature generation and classifier
+training.
+2) Since Dadv is trained entirely on seen classes, ∆u
+adv also
+would be impacted by out-of-distribution of Dadv, rather
+than purely measuring the visual-semantic correlation of
+unseen classes.
+3) Furthermore, one potential idea is to pre-train a discrimi-
+nator covering both seen and unseen categories. However,
+this is incompatible with GANs, as the discriminator
+must be co-optimized with the current generator during
+adversarial optimization. A pre-trained discriminator alone
+will fail to accurately reflect the difference between the
+current generator distribution and the true distribution.
+Therefore, we only recommend that only using ∆u
+adv as an
+empirical indicator instead of strict quantification. Using both
+This article has been accepted for publication in IEEE Transactions on Pattern Analysis and Machine Intelligence. This is the author's version which has not been fully edited and 
+content may change prior to final publication. Citation information: DOI 10.1109/TPAMI.2026.3728839
+© 2026 IEEE. All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies. Personal use is permitted,
+but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+Authorized licensed use limited to: XiangTan University. Downloaded on October 21,2026 at 02:50:31 UTC from IEEE Xplore.  Restrictions apply. 
+
+=== PAGE 6 ===
+6
+(f) Mutual
+learning
+W-distance
+𝑤𝑎𝑑𝑣
+W-distance
+𝑤𝑑𝑖𝑓𝑓
+ℒ𝑚𝑢
+W-distance 𝑤𝑟𝑒𝑝
+𝐺𝒗0
+𝑠 𝒗𝑡−1
+𝑠
+𝑞(𝒗𝑡−1
+𝑠 |𝒗0
+𝑠)
+𝑞(𝒗𝑡|𝒗𝑡−1)
+C
+Image
+𝒙𝑠
+Real clean
+visual feature Diffusion time
+Real noised visual features
+at time 𝑡 − 1 or 𝑡 DFG
+𝒗𝑡
+𝑠
+t
+𝒛
+𝒂𝑠 Semantic
+label
+෤𝒓0
+𝑢𝑅∗
+Fake clean con. rep.
+DRG
+(frozen)
+𝒂𝑢 𝑇 𝒓𝑻
+𝑢𝒛
+Dynamically represent instances
+(e) Representation learning
+𝐷𝑟𝑒𝑝
+෥𝒗0
+𝑠
+𝒗0
+𝑠 C
+C
+ℒ𝑟𝑒𝑝
+Rep.
+discriminator
+𝐷𝑎𝑑𝑣
+෥𝒗0
+𝑠
+𝒗0
+𝑠 C
+C
+𝒂𝑠
+(c) Adversarial learning
+ℒ𝑎𝑑𝑣
+Feature
+discriminator
+(b) Diffusion-based representation generator
+(DRG)
+(a) Diffusion-based feature generator 
+(DFG) Latent variable
+𝐷𝑑𝑖𝑓𝑓
+෥𝒗𝑡−1
+𝑠 C
+𝒗𝑡−1
+𝑠 C
+(d) Denoising learning
+ℒ𝑑𝑖𝑓𝑓
+Diffusion
+discriminator
+𝒗𝑡
+𝑠 𝒂𝑠t 𝒓0
+𝑠
+𝐹𝑐𝑒∗
+Image
+𝒙𝑠
+𝐹s𝑐∗ 𝒓0
+𝑠
+Real clean con. rep.
+𝒓0
+𝑠: used to train 𝐺
+෤𝒓0
+𝑢: used to test 𝐺 
+Rep. extractor
+(frozen)
+Feature extractor
+(frozen)
+𝑞(෥𝒗𝑡−1
+𝑠 |෥𝒗0
+𝑠, 𝒗𝑡
+𝑠)
+Fig. 4: The training stage of our ZeroDiff++. c⃝ represents the concatenation operation. Given frozen extractors F ∗
+ce and F ∗
+sc, we
+take them to extract clean visual features v0 and contrastive representations r0. Then, we use the diffusion forward chain (Eq. 6)
+to obtain real noised visual features vt−1 and vt. Next, G in DFG denoises/generates a fake clean feature ˜v0, conditioned by
+the concatenation of the semantic label a, latent variable z, diffusion time t, noised feature vt, and SC-based representation r0.
+The fake clean feature is evaluated from three different learning perspectives: adversarial learning ( Does it match predefined
+semantics?), denoising learning ( Does it match diffusion processes? ), and representation learning ( Does it match contrastive
+representations?). Finally, we present the mutual learning loss Lmu to integrate knowledge of all discriminators.
+∆s
+adv and ∆u
+adv as analysis metrics, we present the results of
+f-V AEGAN in Fig. 3. We observe that both ∆s
+adv and ∆u
+adv
+increase continuously during training, with larger critic-score
+differences on smaller training sets. For seen classes, this
+implies that the learned visual-semantic correlations become
+less reliable. For unseen classes, although ∆u
+adv may be
+influenced by OOD-data effects, its upward trend still provides
+empirical evidence suggesting that the learned correlations of
+unseen classes is also becoming increasingly spurious.
+C. Training Stage of ZeroDiff++
+We now gradually introduce our proposed components in
+the training stage that are motivated by our three insights
+and corresponding targeted problems. These components are
+integrated into the baseline f-V AEGAN, resulting in the
+proposed ZeroDiff++.
+1) Key1: Diffusion Augmentation : Following traditional
+GAN-based methods, we also adapt Dadv and the traditional
+adversarial loss (Eq. 1) to determine whether the generated
+features align with the predefined semantics, as shown in
+Fig. 4(c). However, one of the causes of spurious visual-
+semantic correlation is Discriminator Overfitting, i.e., limited
+training sets are memorized by Dadv. To this end, the first
+key insight is to leverage the diffusion mechanism to augment
+the limited training set into infinite noisy data to mitigate
+the overfitting. Specifically, we propose our Diffusion-based
+Feature Generator (DFG) G, as shown in Fig. 4 (a).
+Diffusion-based Generating: Given an image xs from
+the training set Dtr, we use F ∗
+ce and F ∗
+sc to extract its
+clean visual features vs
+0 = F ∗
+ce(xs) and clean contrastive
+representation rs
+0 = F ∗
+sc(xs) (The F ∗
+sc and rs
+0 are introduced
+in the Sec. III-C2). Following previous diffusion models [17],
+[33], we apply the diffusion noising process to generate infinite
+data at various noise levels, from weak to strong, according to
+the diffusion forward chain:
+q(vs
+1:T |vs
+0) =
+Y
+t≥1
+q(vs
+t |vs
+t−1), (6)
+q(vs
+t |vs
+t−1) = N (vs
+t ;
+p
+1 − βtvs
+t−1, βtI), (7)
+where βt is a pre-defined variance schedule. When t = T , the
+noised feature vs
+t become fully Gaussian noise. We set the
+maximum diffusion time as T and randomly sample a diffusion
+time t ∼ U(1, · · · , T). We denote the noised visual features as
+vs
+t−1 and vs
+t at the diffusion times t−1 and t, respectively. Next,
+to model the denoising process, we concatenate the noised
+feature vs
+t , diffusion time t, predefined class semantics as,
+latent variable z, and contrastive representation r0 as the input
+of G, i.e. ˜vs
+0 = G(as, rs
+0, t, vs
+t , z). After denoising/generating a
+clean feature ˜vs
+0, it is evaluated from three aspects: adversarial
+learning, denoising learning, and representation learning.
+Diffusion-based Discriminating: To evaluate whether the
+denoised/generated clean features align with the diffusion
+processes, we design the diffusion discriminator Ddif f, as
+illustrated in Fig. 4(d). Ddif f needs to approximate the true
+This article has been accepted for publication in IEEE Transactions on Pattern Analysis and Machine Intelligence. This is the author's version which has not been fully edited and 
+content may change prior to final publication. Citation information: DOI 10.1109/TPAMI.2026.3728839
+© 2026 IEEE. All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies. Personal use is permitted,
+but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+Authorized licensed use limited to: XiangTan University. Downloaded on October 21,2026 at 02:50:31 UTC from IEEE Xplore.  Restrictions apply. 
+
+=== PAGE 7 ===
+7
+෥𝒗0
+𝑢
+(a) Training pre-classifier (The generating stage of ZeroDiff)
+𝐺
+(c) Diffusion-based test-time generating (DiffGen)
+෤𝑦𝑢Pseudo label
+𝒓0
+𝑢
+𝒗𝑡
+𝑢
+𝑡
+𝒛
+෥𝒂𝑢
+𝐺†sample 𝑡
+and 𝒗𝑡
+𝑢
+𝒗0
+𝑢
+𝒗1
+𝑢
+𝒗2
+𝑢
+𝒗T
+𝑢
+…
+Diffusion time 𝑡 increase
+Real partially-noised
+test features
+Real fully-noised test features
+(= Gaussian noise)
+𝒗0
+𝑢
+Diffusion
+forward chain
+Traceable
+𝚨𝑢 
+Real clean 
+test features
+Gaussian 
+distribution
+𝒗0
+𝑢Real clean 
+test features Untraceable
+𝐺†
+Adaptive  
+DFG
+Unadaptive DFG
+Uniform sample
+ZeroDiff/ZeroDiff++ 
+Training Algorithm
+(only on seen classes)
+(b) Diffusion-based test-time adaption (DiffTTA)
+෥𝒗0
+𝑢
+𝐺
+𝒗0
+𝑢
+෤𝑦𝑢Pseudo label
+Pseudo
+semantic
+Real clean 
+test features ℒ𝑢tta
+ℒ𝑠tta
+Persist in seen classes
+𝒗0
+𝑠
+𝑦𝑠GT label
+Real clean 
+train features
+𝒂𝑠 𝒛 ෤𝒓0
+𝑠𝒗𝑡
+𝑠 𝑡
+෥𝒗0
+𝑠
+𝐺
+GT semantic
+Adaptive to unseen classes
+𝒓0
+𝑢𝒗𝑡
+𝑢 𝑡෥𝒂𝑢 𝒛
+𝐹𝑧𝑠𝑙Pre-classifier
+𝐹𝑧𝑠𝑙
+Pre-
+classifier
+ℒ𝑐𝑒
+Unseen class 
+semantics
+sample
+Max diffusion time
+Latent variable
+෤𝒓0
+𝑢
+𝒗𝑇
+𝑢
+𝑇
+𝒛
+𝒂𝑢
+Fake clean con. rep.
+Real clean
+con. rep.
+Real noised
+test features
+at time 𝑡
+𝐹𝑧𝑠𝑙Pre-classifier
+𝐹𝑧𝑠𝑙
+†
+ℒ𝑐𝑒
+Fake clean
+test features
+final 
+classifier
+Pseudo
+semantic
+෥𝒗0
+𝑢
+Fig. 5: The generating stage of our ZeroDiff++. In the generating stage, Zerodiff++ firstly trains a pre-classifier Fzsl by
+unadaptive DFG. Next, it adapts unseen classes by the Lutta loss to minimize the denoising error between real test features vu
+0
+and fake test features ˜vu
+0 conditioned by the pseudo semantics from pre-classifier. Besides, it also uses the Lstta to prevent
+forgetting seen classes, leading to the adaptive DFG G†. Finally, it samples the partially-noised test features vu
+t from the
+diffusion forward chain, generates the partially-denoised test features ˜vu
+t , and training the final ZSL classifier F †
+zsl.
+denoising distribution q(vs
+t−1|vs
+t ). To this end, we posterior-
+sample the fake noised visual feature ˜vs
+t−1,
+˜vs
+t−1 ∼ q(˜vs
+t−1|˜vs
+0, vs
+t ) = N (˜vs
+t−1; ˜µt(vs
+t , ˜vs
+0), ˜βtI), (8)
+˜µt(vs
+t , ˜vs
+0) =
+√¯αt−1βt
+1 − ¯αt
+˜vs
+0 +
+√αt(1 − ¯αt−1)
+1 − ¯αt
+vs
+t , (9)
+where ˜βt = 1−¯αt−1
+1−¯αt
+βt and ¯αt =Qt
+j=1(1 − βj). Note that the
+same diffused feature vs
+t is used for both the real and generated
+branches. Specifically, the fake sample ˜vs
+t−1 is obtained by
+replacing the clean feature vs
+0 in the posterior with the generated
+feature ˜vs
+0, while keeping the noisy observation vs
+t unchanged.
+This design ensures that the diffusion discriminator evaluates
+the consistency of the generated clean feature under the same
+diffusion condition, eliminating the influence of additional
+stochastic noise introduced by re-diffusing ˜vs
+0.
+Then, we train Ddif f to learn the Wasserstein distance
+between them:
+Ldif f = Wdif f − λgpdif fLgpdif f, (10)
+Wdif f = E[Ddif f(vs
+t−1, vs
+t , rs
+0, as, t)]
+− E[Ddif f(˜vs
+t−1, vs
+t , rs
+0, as, t)], (11)
+Lgpdif f = E[(∥∇ˆvs
+t−1 Ddif f(ˆvs
+t−1, vs
+t , rs
+0, as, t)∥2 − 1)2],
+(12)
+where ˆvs
+t−1 = αvs
+t−1 + (1− α)˜vs
+t−1 with α ∼ U(0, 1). Our G
+minimizes Lgpdif f, which equates to minimizing the learned
+divergence per denoising step:
+X
+t≥1
+E[Ddif f(q(vs
+t−1|vs
+t ))∥pG(q(˜vs
+t−1|vs
+t ))]. (13)
+In Sec. V, we also theoretically proved that the diffusion-
+based discriminator Ddif f has better resistance to overfitting
+than clean-sample discriminator Dadv since the overlap mass
+would increase with diffusion time t, remedying disjoint-
+support failure, and Ddif f has a tighter upper bound than
+Dadv for generalization error.
+2) Key2: SC-based Representations : Another cause of
+spurious visual-semantic correlation is the use of Static Class-
+level Semantics . In other words, existing semantic labels a
+are class-level, meaning all instances within a class share the
+same semantic label. This can result in mismatched correlations
+between instances and their semantics, as each limited sample
+may only represent a subset of the predefined semantics. For
+example, as shown in Fig. 1, all images in the “fox” class
+are labeled with the semantics “red” and “white,” even though
+white foxes are not “red.” Such mismatches further amplify
+spurious visual-semantic correlations.
+To address the static class semantic problem, we revisit
+the SC loss [16] and point out that SC-based representations
+could be used to represent instance-level semantics. Previous
+This article has been accepted for publication in IEEE Transactions on Pattern Analysis and Machine Intelligence. This is the author's version which has not been fully edited and 
+content may change prior to final publication. Citation information: DOI 10.1109/TPAMI.2026.3728839
+© 2026 IEEE. All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies. Personal use is permitted,
+but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+Authorized licensed use limited to: XiangTan University. Downloaded on October 21,2026 at 02:50:31 UTC from IEEE Xplore.  Restrictions apply. 
+
+=== PAGE 8 ===
+8
+work [35] showed that SC-based representations have larger
+inter-class variation than those of CE-based features. This indi-
+cates that SC-based representations mirror the characteristics of
+every instance within classes. Our empirical study also verifies
+this point in Appendix A.
+To this end, we use SC-based representations as a new
+source of semantics. Except fine-tuning the CE-based extrac-
+tor Fce, we also fine-tune Fsc with the SC loss: LSC =
+− log exp(h⊤h+/τ)
+exp(h⊤h+/τ)+Pk=1
+K exp(h⊤h−
+k /τ), where h+, h−, K and
+τ > 0 are the positive example (have the same class label
+with h), negative example (have a different class label to
+h), the number of h− in the batch, a temperature parameter,
+respectively. And then. fix it as F ∗
+sc to extract contrastive
+representations rs
+0 = F ∗
+sc(xs). The extracted rs
+0 is taken as the
+input to G for instance-level semantics, as shown in Fig. 4(b).
+Representation Discriminating As shown in Fig. 4(e), the
+representation discriminator Drep is responsible for distinguish-
+ing features via the contrastive representation view. It operates
+in a similar manner to Dadv, but with the pre-defined semantics
+a replaced by the contrastive representation:
+Lrep = Wrep − λgprepLgprep, (14)
+Wrep = Eq(vs
+0)[Drep(vs
+0, rs
+0)] − EpG(˜vs
+0)[Drep(˜vs
+0, rs
+0)], (15)
+Lgprep = E q(vs
+0),
+pG(˜vs
+0)
+[(∥∇ˆvs
+0 Drep(ˆvs
+0, rs
+0)∥2 − 1)2]. (16)
+Unseen Representation Generating At the testing stage,
+we cannot get real unseen class representations ru
+0 and feed
+them to G. Thus, we train another representation generator
+DRG R to learning the mapping between instance-level SC
+representations r0 from class-level semantic labels a.
+3) Key3: Mutual-learned Discriminators : As shown in
+Fig. 4(f), since our three discriminators evaluate features in
+different ways, they have different criteria for judging them. If
+we can enable them to learn mutually, we can obtain stronger
+discriminators, resulting in better guidance for the generator.
+For example, the objectives of Dadv and Ddif f are two very
+similar but distinct tasks: one separates clean features, and
+the other separates noised features. Clearly, separating noisy
+features is a harder task because with more diffusion steps,
+less information remains. Thus, if we can distill the knowledge
+from Dadv to Ddif f, we can enhance the separation ability on
+noisy features and use the stronger Ddif f to improve denoising.
+In contrast, distilling the knowledge from Ddif f to Dadv could
+prevent Dadv from memorizing training samples. To this end,
+we propose the Wasserstein-distance-based distillation loss:
+Lmu = κγ
+t ∗ (∥Wdif f − Wadv∥1 + ∥Wdif f − Wrep∥1)
++ ∥Wadv − Wrep∥1, (17)
+where κt is the Noise-to-Data (N2D) ratio, represented as 1 −qQt
+j=1(1 − βj), and γ is a smoothing factor. As t increases,
+κt also increases, making it harder to distinguish between fake
+and real noised features, and Wdif f provides less guidance
+for Wrep and Wadv. Therefore, we introduce a smoothing
+factor γ ≥ 0 to control the strength of discriminator alignment.
+Furthermore, although these three W-distances have different
+scales, this does not affect the performance of mutual learning,
+as discussed in detail in Appendix B.B.
+Combining aforementioned training losses, ZeroDiff++ al-
+ternately trains G and three discriminators Dadv, Ddif f, and
+Drep to optimize the following objective function:
+min
+G
+max
+Dadv,Ddif f,Drep
+(Ladv + Ldif f + Lrep − λmuLmu), (18)
+where λmu is the hyper-parameter related to the mutual
+learning.
+D. Generating Stage of ZeroDiff++
+Before we introduce our proposed generating stage, let us
+recall the traditional generating stage. As shown in Fig. 5(a) and
+(b), the traditional generating stage simply freezes the trained
+generator to synthesize fake unseen class features. Taking
+ZeroDiff [1] as an example, we denote the frozen DFG and
+DRG as G∗ and R∗ and synthesize Nsyn features for each
+unseen class:
+˜vu
+0 = G∗(au, ˜ru
+0 , T, vu
+T , z), (19)
+˜ru
+0 = R∗(au, T, ru
+T , z), (20)
+where ru
+T and vu
+T are fully gaussian noises, the diffusion time
+only could be set as the maximal T , and au are uniformly
+sampled from the unseen semantic space Au. We can utilize
+generated fake unseen class features ˜vu
+0 to train a ZSL classifier
+Fzsl in the feature space, i.e. Fzsl : V u → Y u.
+Now, let us find the potential problems in the traditional
+generating stage. On one hand, G still is a unadaptive
+generator: although it learns a good visual-semantic correlation
+on seen classes after the training stage, the learned correlation
+still has a non-negligible gap with the unseen visual-semantic
+correlation because G does not adapt to unseen classes. On the
+other hand, the traditional generating stage (Eq. 19) is fully-
+noised generating: the input of G does not contain any real
+feature information, leading to missing a connection between
+real and fake visual features. We propose the following two
+insights to overcome these two problems.
+1) Key 4: Diffusion-based Test-time Adaptation : For
+generator adaptation, we propose the Diffusion-based Test-time
+Adaptation (DiffTTA) that aims to shrink the correlation gap at
+the generating stage, as shown in Fig. 5(c). Specifically, given
+an unlabeled unseen class image xu, we use FCE and FSC to
+extract its CE-based feature vu
+0 and SC-based representation
+ru
+0. However, since its corresponding class label yu is missing,
+we cannot obtain its ground truth semantic au. As a result,
+we cannot directly apply the training optimization 18 on
+unseen class samples to adapt to the unseen class distribution.
+To overcome this point, we use a pre-classifier to obtain
+it a pseudo label ˜yu and semantic ˜au. The pre-classifier
+could be any existing ZSL classifier, e.g., ZeroDiff Fzsl or
+DiffusionZSL [19].
+However, pseudo labels might amplify the instability of
+adversarial optimization 18. Thus, we propose the unseen class
+TTA loss Lutta based on feature reconstruction:
+Lutta = ∥vu
+0 − G(˜au, ru
+0 , t, vu
+t , z)∥, (21)
+This article has been accepted for publication in IEEE Transactions on Pattern Analysis and Machine Intelligence. This is the author's version which has not been fully edited and 
+content may change prior to final publication. Citation information: DOI 10.1109/TPAMI.2026.3728839
+© 2026 IEEE. All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies. Personal use is permitted,
+but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+Authorized licensed use limited to: XiangTan University. Downloaded on October 21,2026 at 02:50:31 UTC from IEEE Xplore.  Restrictions apply. 
+
+=== PAGE 9 ===
+9
+Analogously, we also reconstruct seen class samples to prevent
+forgetting seen classes:
+Lstta = ∥vs
+0 − G(as, rs
+0, t, vs
+t , z)∥. (22)
+And we combine these two reconstruction losses as the total
+adaptation loss:
+Ltta = Lutta + Lstta. (23)
+2) Key 5: Diffusion-based Test-time Generation : To en-
+hance the link between fake and real features, we further
+propose the Diffusion-based Test-time Generation ( DiffGen),
+as shown in Fig. 5(d). It further utilizes the diffusion forward
+chain to connect the original real test features and the generated
+fake test features in the generating stage. Formally, DiffGen
+generates fake unseen class features by:
+˜vu
+0 = G†(˜au, ru
+0 , t, vu
+t , z). (24)
+Compared to the traditional generating approach (Eq. 19), our
+DiffGen has two main properties in solidifying visual-semantic
+correlation in the generating stage:
+1) Traceable feature generation : Every generated fake
+feature could be connected to a real test feature. It not only
+strongly shrinks the gap between real and fake unseen
+class features, but also provides an evidential generating
+method that allows us to trace the failure of generating
+samples.
+2) Partial feature imagination : When t = 0, the DiffGen
+(Eq.24) becomes fully copy the real test sample ˜vu
+0 . When
+t = T , the DiffGen (Eq.24) degrades to the traditional
+fully-noised generating (Eq.19). When 0 < t < T , we
+could adjust the retention ratio of real test samples vu
+0
+among fake test samples ˜vu
+0 by changing t. It means a
+trade-off between fully copying real test samples and fully
+fabricating fake test samples. As a result, it reduces the
+difficulty of unseen generation because ZeroDiff++ only
+needs to generate a portion of fake samples, resulting in
+a more solidified unseen class generation.
+3) Paired instance semantics: Since our DiffGen takes every
+real noised test features vu
+t to feed G, we could get the
+corresponding real SC-based representation ru
+0 to replace
+the fake ˜ru
+0 in Eq. 19. Our experimental results also verify
+the importance of the paired vu
+t and ru
+0.
+With DiffGen, we train a new ZSL classifier F †
+zsl by the
+generated partial imagined unseen class features ˜vu
+0 .
+IV. E XPERIMENTS
+A. Dataset
+We conduct experiments on three popular ZSL benchmarks:
+AWA2 [2], CUB [46], and SUN [47]. AWA2 consists of 65
+animal classes with 85-D attributes and includes 37,322 images.
+CUB is a bird dataset containing 11,788 images of 200 bird
+species. SUN has 14,340 images of 645 seen and 72 unseen
+classes of scenes. We follow the commonly used setting [2]
+to divide the seen and unseen classes. We report the average
+per-class Top-1 accuracy of unseen classes for ZSL. For GZSL,
+we evaluate the Top-1 accuracy on seen classes ( S) and unseen
+classes (U), and report their harmonic mean H = 2×S×U
+S+U .
+B. Implementation Details
+For visual features, we extract 2,048-D features for all
+datasets using ResNet-101 [48] pre-trained with CE on
+ImageNet-1K [49]. For contrastive representations, we adopt
+ResNet-101 pre-trained with PaCo [50] on ImageNet-1K. For
+semantic labels, we use 85-D attribute vectors for AWA2,
+1,024-D attributes extracted from textual descriptions [51] for
+CUB, and 102-D attributes for SUN. We use Adam to optimize
+all networks with an initial learning rate of 0.0005. For all
+datasets, λgpadv, λgpdif f, and λgprep are fixed at 10. Following
+DDGAN [17], the number of diffusion steps T is set to 4, and
+we use the discretization of the continuous-time extension,
+known as the Variance Preserving (VP) SDE [52] to compute
+βt in Eq. 6. All experiments are conducted on Quadro RTX
+8000.
+TABLE I: Comparisons with the state-of-the-arts on ZSL. The
+best and second-best results are marked in Bold and Underline,
+respectively. † denoted the results using our fine-tune features,
+while ‡ using other fine-tune features. The upper group indicates
+embedding methods, and the lower group is for generative
+methods.
+Method Venue Backbone AW A2 CUB SUN
+APN NeurIPS20 Res101 68.4 72.0 61.6
+TransZero++ TPAMI22 Res101 72.6 78.3 67.6
+ReZSL TIP23 Res101 70.9 80.9 63.0
+ZSLViT CVPR24 ViT 70.7 78.9 68.3
+PSVMA++ TPAMI25 ViT 79.2 78.8 74.5
+f-CLSWGAN† CVPR18 Res101 75.9 84.5 75.5
+f-V AEGAN† CVPR19 Res101 75.8 85.1 75.4
+TFV AEGAN† ECCV20 Res101 72.4 85.8 74.1
+SDV AE† ICCV21 Res101 69.3 85.1 77.0
+CEGAN† CVPR21 Res101 72.8 84.6 74.1
+DFCAFlow† TCSVT23 Res101 74.4 83.9 77.2
+DiffusionZSL† ICCV23 Res101 76.4 76.7 67.5
+V ADS‡ CVPR24 ViT 82.5 86.8 76.3
+ZeroDiff† ICLR25 Res101 87.3 87.5 77.3
+ZeroDiff++† Ours Res101 93.5 87.7 80.2
+C. Comparison with State-of-the-art
+We select representative generative ZSL methods across
+different generative model types. These methods include: 1.
+GAN-based methods : f-CLSWGAN [44] and CEGAN [9]; 2.
+V AE-based methods: SDV AE [53]; 3.V AEGAN-based meth-
+ods: f-V AEGAN [29], TFV AEGAN [30], DSP [34], DML [54]
+and V ADS [11]; 4. Flow-based method : DFCAFlow [55].
+5. Diffusion-based method : DiffusionZSL [19]. We also
+provide comparisons with embedding-based SOTAs: APN [56],
+TransZero++ [25], ReZSL [24], PSVMA [57], ZSLViT [58] and
+PSVMA++ [59]. Besides, large-scale vision-language models
+(LVLM), i.e., CLIP [60], CoOp [61], and TPR [62], have shown
+significant potential for task-level ZSL ability that allows them
+to perform well on many downstream tasks, also including
+zero-shot classification. However, they do not follow the strict
+standard class splitting, whose traditional zero-shot methods
+used and unseen class images are highly possibly included in
+their pre-training dataset. Nonetheless, we still include them
+for better reference.
+This article has been accepted for publication in IEEE Transactions on Pattern Analysis and Machine Intelligence. This is the author's version which has not been fully edited and 
+content may change prior to final publication. Citation information: DOI 10.1109/TPAMI.2026.3728839
+© 2026 IEEE. All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies. Personal use is permitted,
+but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+Authorized licensed use limited to: XiangTan University. Downloaded on October 21,2026 at 02:50:31 UTC from IEEE Xplore.  Restrictions apply. 
+
+=== PAGE 10 ===
+10
+TABLE II: Comparisons with the state-of-the-arts on GZSL. U, S, and H represent the top-1 accuracy (%) of unseen classes,
+seen classes, and their harmonic mean, respectively. The best and second-best results are marked in Bold and Underline,
+respectively. † denoted the results using our fine-tune features, while ‡ using other fine-tune features. The upper group indicates
+embedding methods, and the lower group is for generative methods. We also use * to distinguish LVLM-based methods from
+traditional ZSL methods since the former rely on larger amounts of pre-trained data and model capacity.
+Method Venue Backbone AW A2 CUB SUN
+U S H U S H U S H
+APN NeurIPS20 Res101 56.5 78.0 65.5 65.3 69.3 67.2 41.9 34.0 37.6
+CLIP* ICML21 ViT 77.6 81.6 79.6 29.6 29.8 29.7 49.5 46.2 47.8
+CoOp* IJCV22 ViT 69.4 81.3 74.9 18.2 22.2 20.0 49.3 49.8 49.5
+TransZero++ TPAMI22 Res101 64.6 82.7 72.5 67.5 73.6 70.4 48.6 37.8 42.5
+ReZSL TIP23 Res101 63.8 85.6 73.1 72.8 74.8 73.8 47.4 34.8 40.1
+PSVMA CVPR23 ViT 73.6 77.3 75.4 70.1 77.8 73.8 61.7 45.3 52.3
+TPR* NeurIPS24 ViT 76.8 87.1 81.6 26.8 41.2 32.5 45.4 50.4 47.8
+ZSLViT CVPR24 ViT 66.1 84.6 74.2 69.4 78.2 73.6 45.9 48.4 47.3
+EG TPAMI24 ViT 65.2 79.6 71.7 65.3 66.7 66.0 54.7 59.4 57.0
+PSVMA++ TPAMI25 ViT 74.2 86.4 79.8 71.8 77.8 74.6 61.5 49.4 54.8
+f-CLSWGAN† CVPR18 Res101 65.1 68.9 66.9 76.4 83.3 79.7 63.8 55.7 59.5
+f-V AEGAN† CVPR19 Res101 67.3 65.6 66.4 77.4 83.5 80.3 63.6 54.1 58.4
+TFV AEGAN† ECCV20 Res101 54.2 89.6 67.5 79.0 83.3 81.1 51.8 53.8 52.8
+SDV AE† ICCV21 Res101 57.0 72.3 63.8 81.6 74.2 77.7 62.3 56.9 59.5
+CEGAN† CVPR21 Res101 57.1 89.0 69.6 78.9 80.9 79.9 58.1 57.4 57.8
+DFCAFlow† TCSVT23 Res101 67.6 81.0 73.7 77.3 82.9 80.0 63.0 59.6 61.2
+DiffusionZSL† ICCV23 Res101 6.4 70.7 11.8 15.4 58.5 24.4 2.8 36.7 5.2
+DSP‡ ICML23 Res101 60.0 86.0 70.7 51.4 63.8 56.9 48.3 43.0 45.5
+V ADS‡ CVPR24 ViT 75.4 83.6 79.3 74.1 74.6 74.3 64.6 49.0 55.7
+ZeroDiff† ICLR25 Res101 74.7 89.3 81.4 80.0 83.2 81.6 63.0 56.9 59.8
+ZeroDiff++† Ours Res101 90.7 93.9 92.3 84.4 86.4 85.4 73.4 66.2 69.6
+The ZSL results are presented in Table I and GZSL results
+are presented in Table II. Our method ZeroDiff++ exhibits
+consistent and substantial improvements over both embedding-
+based and generative baselines across three datasets. We could
+conclude three points:
+1) ZeroDiff++ consistently outperforms prior embedding-
+and generative-based SOTAs. In ZSL setting, ZeroDiff++
+achieves 93.5% / 87.7% / 80.2% on AWA2 / CUB /
+SUN, and in GZSL the harmonic means H are 92.3% /
+85.4% / 70.5%; these correspond to absolute improvements
+over ZeroDiff of roughly +9.9%, +3.8% and +10.7% in
+H. The results indicate that ZeroDiff++ not only raises
+unseen-class accuracy but also substantially improves the
+seen/unseen balance in the GZSL setting.
+2) Experimental results also expose how ZeroDiff++ mit-
+igates the common weakness of many generative ap-
+proaches. Several generators exhibit severe seen/unseen
+imbalance (high S but low U). For example, TFV AEGAN
+on AWA2 reports S = 89.6%, U = 54.2% H = 67.5%.
+Prior diffusion-based method DiffusionZSL produces
+extremely low U and H. By contrast, ZeroDiff++ yields
+both high U and high S (AW A2:U = 90.7%, S = 93.9%,
+H = 92.3%); Results demonstrate that our diffusion-based
+training and testing modules improve the seen and unseen
+visual-semantic correlation.
+3) Notably, our ZeroDiff++ also significantly outperforms
+the large-scale vision-language based methods (e.g., CLIP,
+CoOp, and TPR). CLIP/CoOp/TPR obtain reasonable H
+on coarse AW A2 but fail on fine-grained CUB (CLIP H:
+79.6% / 29.7% / 47.8% on AW A2 / CUB / SUN), whereas
+ZeroDiff++ yields +12.7%, +55.7% and +22.7% higher in
+H on the same benchmarks. The results demonstrate that
+although large pre-trained vision-language models enojoy
+large parameters and pre-training data, task-specific ZSL
+methods still remain highly competitive.
+D. Limited Training Data
+To investigate the performance of generative ZSL approaches
+under limited training data, we randomly keep training samples
+of each seen class at different ratios. As the remaining
+ratio decreases, ZSL becomes more challenging since over-
+fitting to the training samples becomes much easier. For
+fairness, we decrease the number of synthesized unseen features
+proportionally to avoid class imbalance in GZSL. The results
+are reported in Table III.
+The following observations can be made:
+1) GAN-based approaches, f-CLSWGAN and CEGAN, dete-
+riorate severely when only limited training data are avail-
+able. For example, f-CLSWGAN drops from T1=68.9%
+(30% Dtr) to T1=54.0% (10% Dtr) on AWA2, and its
+GZSL H falls from 57.8% to 35.7%, indicating that vanilla
+GANs are fragile under data scarcity and prone to overfit-
+ting or mode collapse. CEGAN is slightly more stable but
+still shows clear degradation (AW A2 H: 70.4% → 66.3%
+when moving from 30%Dtr → 10%Dtr).
+2) Combining V AE and GAN (f-V AEGAN) alleviates some
+GAN instability but does not fully solve limited-data
+failure modes: on SUN with 30% Dtr f-V AEGAN
+attains T1=72.0% while the simpler f-CLSWGAN reaches
+T1=73.4%, and f-V AEGAN’s H also degrades sharply
+at 10% (49.0% → 27.8% on SUN). These results show
+that when the training set is limited, the mode collapse
+problem still remains, which sometimes performs even
+worse than the methods that only use GAN.
+This article has been accepted for publication in IEEE Transactions on Pattern Analysis and Machine Intelligence. This is the author's version which has not been fully edited and 
+content may change prior to final publication. Citation information: DOI 10.1109/TPAMI.2026.3728839
+© 2026 IEEE. All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies. Personal use is permitted,
+but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+Authorized licensed use limited to: XiangTan University. Downloaded on October 21,2026 at 02:50:31 UTC from IEEE Xplore.  Restrictions apply. 
+
+=== PAGE 11 ===
+11
+TABLE III: Comparison on limited training data. We evaluate generative methods with 30% and 10% training samples. T 1
+represents the top-1 accuracy (%) of unseen classes in ZSL. In GZSL, H represents the harmonic mean of the top-1 accuracy
+(%) of unseen classes, seen classes. The best and second-best results are marked in Bold and Underline, respectively.
+Method
+AW A2 CUB SUN
+30%Dtr 10%Dtr 30%Dtr 10%Dtr 30%Dtr 10%Dtr
+T1 H T1 H T1 H T1 H T1 H T1 H
+f-CLSWGAN [44] 68.9 57.8 54.0 35.7 82.1 75.3 75.1 66.8 73.4 51.5 66.9 29.3
+f-V AEGAN [29] 81.2 64.9 73.1 54.4 84.5 78.3 81.5 75.0 72.0 49.0 58.4 27.8
+CEGAN [9] 72.2 70.4 69.0 66.3 83.6 77.6 81.3 74.8 65.9 45.6 - -
+DFCAFlow [55] 74.5 72.6 77.9 70.7 82.7 77.2 80.3 74.1 74.2 55.8 70.2 31.3
+DiffusionZSL [19] 75.1 11.0 70.5 10.7 76.1 24.1 73.0 23.2 64.5 4.3 19.7 0.3
+ZeroDiff [1] 84.9 80.2 83.3 77.0 85.5 78.7 82.9 76.1 75.4 51.3 68.1 33.3
+ZeroDiff++ (Ours) 92.8 91.9 93.8 92.0 87.4 82.8 85.2 77.3 77.9 59.2 75.0 41.0
+TABLE IV: Comparison on different inference methods: traditional FNGen, recent DiffusionZSL [19] and our DiffGen.
+ID DiffTTA Inference Method
+ZSL GZSL
+AW A2 CUB SUN AW A2 CUB SUN
+T1 T1 T1 U S H U S H U S H
+a
+×
+FNGen 85.5 86.0 77.6 70.5 77.5 73.8 77.6 83.9 80.6 62.0 58.1 60.0
+b DiffusionZSL 76.9 77.2 66.4 6.5 70.0 11.9 15.3 58.5 24.2 2.6 38.3 4.9
+c DiffGen 92.9 87.0 80.0 86.4 89.7 88.0 84.3 85.7 85.0 77.0 63.4 69.5
+d
+✓
+FNGen 81.1 85.4 77.4 66.1 82.2 73.3 77.4 85.9 81.4 63.1 60.5 61.8
+e DiffusionZSL 80.3 78.6 69.3 7.9 70.9 14.3 16.1 57.8 25.2 2.7 37.9 5.0
+f DiffGen 93.5 87.6 80.5 90.7 93.9 92.3 85.5 86.1 85.8 78.6 64.3 70.8
+3) DiffusionZSL reports reasonably high ZSL T1 but catas-
+trophically low GZSL H (e.g., AWA2 30%: T1=75.1%
+but H = 11.0%; CUB 30%: T1=76.1% but H = 24.1%).
+The results consistently show that DiffusionZSL suffers
+from several class bias problems.
+4) With the introduction of the diffusion mechanism and
+instance-level representations, ZeroDiff achieves impres-
+sive performances in most cases (ZeroDiff 30% AWA2
+H = 80.2%), and ZeroDiff++ further improves robustness
+(ZeroDiff++ 30% AW A2H = 91.9%), demonstrating that
+the diffusion-based adaptation and generation improve
+sample efficiency and maintain a strong seen/unseen
+balance under extreme scarcity.
+E. Comparison on ZSL Inference methods
+We conduct an ablation study comparing three inference
+schemes: (1) the conventional fully-noised feature generation
+(FNGen), (2) the reconstruction-error classifier approach used
+by DiffusionZSL, and (3) our DiffGen (partial, traceable
+generation), as shown in Table IV. The table shows two
+consistent patterns:
+1) DiffGen strongly outperforms both baselines on ZSL
+and, crucially, GZSL. For example, when we do not use
+DiffTTA, DiffGen yields ZSL T1 92.9% / 87.0% / 80.0%
+(AWA2 / CUB / SUN) vs. FNGen’s 85.5% / 86.0% /
+77.6% and DiffusionZSL’s 76.9% / 77.2% / 66.4%; in
+GZSL (AW A2) DiffGen achieves U/S/H = 86.4% / 89.7%
+/ 88.0%, substantially higher than FNGen (70.5% / 77.5%
+/ 73.8%) and DiffusionZSL (6.5% / 70.0% / 11.9%).
+2) DiffTTA is most beneficial when combined with DiffGen.
+With DiffTTA enabled, DiffGen improves further (AW A2
+GZSL H from 88.0% → 92.3%, U from 86.4% → 90.7%),
+whereas DiffTTA alone does not rescue FNGen or fully
+fix DiffusionZSL’s severe seen/unseen bias. This indicates
+that the combination of an adaptive generator (DiffTTA)
+plus partially real generation (DiffGen) both raises unseen
+accuracy and restores seen/unseen balance.
+F . Ablation Study
+We conduct the component effectiveness study in Sec. IV-F1
+and hyper-parameter sensitivity in Sec. IV-F2. We also provide
+a detailed ablation on our DiffGen in Sec. IV-F3.
+1) Component Effectiveness: We examine the effect of the
+proposed components: G, R, Dadv, Ddif f, Drep, and Lmu.
+The results are reported in Table V, and we could get three
+conclusion:
+1) DiffAug alone can improve the T1 of AWA2 from
+76.0% to 80.0%. Further addition of SC and Lmu further
+increases the T1 to 86.4, and the H value increases accord-
+ingly. This proves the effectiveness of our three training
+insights on stabilizing the visual-semantic association
+during the training phase.
+2) While DiffTTA offers limited improvement over a single
+FNGen when used for generation alone, it significantly
+improves the seen/unseen balance when used to adapt
+the generator and combined with DiffGen. This indicates
+that fine-tuning the generator using the reconstruction
+loss of real test features during testing helps narrow the
+training/test distribution gap.
+3) DiffGen introduces a traceable and partially imaginable
+generation strategy, which in itself brings significant
+performance improvements. As shown in the table, it
+This article has been accepted for publication in IEEE Transactions on Pattern Analysis and Machine Intelligence. This is the author's version which has not been fully edited and 
+content may change prior to final publication. Citation information: DOI 10.1109/TPAMI.2026.3728839
+© 2026 IEEE. All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies. Personal use is permitted,
+but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+Authorized licensed use limited to: XiangTan University. Downloaded on October 21,2026 at 02:50:31 UTC from IEEE Xplore.  Restrictions apply. 
+
+=== PAGE 12 ===
+12
+TABLE V: Ablation study on five insightful components of our ZeroDiff++ and the modality of the final ZSL classifier. ✓ and
+× denote yes and no. V , C, and S denote CE-based space, SC-based space, and class-level semantic space.
+ID Classifier Component AW A2 CUB SUN
+DiffAug SC Lmu DiffTTA DiffGen T1 H T1 H T1 H
+a V × × × × × 76.0 69.5 83.1 79.7 74.3 56.9
+b V ✓ × × × × 80.0 72.5 83.3 79.8 75.4 59.5
+c V ✓ ✓ × × × 84.4 76.3 83.6 80.1 76.1 59.8
+d V ✓ × ✓ × × 81.3 73.3 84.1 80.2 76.2 59.9
+f V ✓ ✓ ✓ × × 86.4 76.9 84.3 80.2 76.4 60.0
+g V ✓ ✓ ✓ ✓ × 86.5 78.7 84.8 80.7 76.5 60.6
+h V ✓ ✓ ✓ × ✓ 89.1 84.4 84.9 80.9 78.8 65.3
+i V ✓ ✓ ✓ ✓ ✓ 91.8 90.6 85.0 81.0 79.1 66.1
+j V+C ✓ ✓ ✓ ✓ ✓ 93.5 92.3 86.7 85.0 80.2 69.6
+h V+C+S ✓ ✓ ✓ ✓ ✓ 90.5 89.6 87.7 85.4 79.7 69.0
+AWA2CUBSUN
+100% training set 30% training set 10% training set
+Traditional FNGen
+GZSL HGZSL SGZSL U
+Our DiffGen
+Fig. 6: The effect of the number of synthetic samples Nsyn.
+The shaded area indicates the improvement of GZSL H from
+our DiffGen compared to the traditional FNGen.
+achieves optimal performance when used in conjunction
+with DiffTTA. This demonstrates the effectiveness of
+generation methods based on real-world noise features
+compared to pure noise generation, significantly narrowing
+the gap between generated features and real test features.
+2) Ablation study for the number of generated features: For
+hyper-parameter sensitivity, we conclude the experiments about
+the number of synthesized samples for each unseen class nsyn
+in Fig. 6. The accuracy for the unseen class increases with the
+number of synthesized samples, and when Nsyn is large enough,
+the performances become stable. This result demonstrates that
+the features synthesized by our method effectively mitigate the
+issue of missing data for unseen classes.
+3) Ablation study for DiffGen: We ablate the design choices
+of DiffGen along two axes: the type of SC (paired semantics)
+fed to the generator and the diffusion time t used for partial
+denoising. Table VI reports results for these variants. We have
+three main findings.
+1) Real SC vs. Fake SC. Replacing the generated SC with
+the real, paired SC consistently improves both ZSL T1
+and GZSL H across datasets. For instance, on AWA2,
+using the real SC at t=2 yields ZSL T1 = 92.3% and
+GZSL H = 91.9%, while the best “Fake” SC configuration
+reaches only H = 81.8% (AW A2, t=1). This confirms that
+using paired instance-level semantics strongly tightens the
+visual–semantic link and reduces generation drift.
+2) A trade-off between copy and imagination. Small t means
+DiffGen copies more of the real feature; large t approaches
+fully-noised, fully-synthetic generation. The table shows
+a clear sweet-spot at intermediate t (e.g., t = 2): AW A2
+H peaks at 91.9% for real SC at t = 2 , while very
+small or maximal t either under-utilize imagination or
+reintroduce distribution mismatch. Thus, partial denoising
+with a moderate t balances realism and diversity and gives
+the best seen/unseen harmonic means.
+3) Randomized t in DiffGen is acceptable but suboptimal.
+Randomizing DiffGen t increases robustness to step choice
+and can sometimes improve individual dataset metrics by
+introducing a mixture of copy/imagine behaviors, but it is
+less consistent than fixing t at the empirically chosen
+moderate value. In our experiments, while random t
+occasionally matches or slightly exceeds single-metric
+scores on CUB or SUN, the stable best-performing
+configuration remains real paired SC + fixed moderate t
+for balanced GZSL H.
+G. Mutual Learning Effectiveness
+To further verify the effect of our Lmu, we designed an
+additional experiment to show the change in critic score. Due
+to the page limitation, we provide the results and discussion
+in Appendix B.
+H. Visualization Analysis
+1) Feature TSNE Visualization: We also provide a qualitative
+comparison between the baseline f-V AEGAN, ZeroDiff, and
+our ZeroDiff++ using t-SNE visualization of the real and
+synthesized sample features in Fig. 7. The visualization shows
+that as the number of training samples decreases, f-V AEGAN
+gradually fails to generate unseen classes fully. The features
+generated by fvaegan using 10% of the training data clustered
+together and could not be classified at all. Zerodiff, on the
+other hand, has relative robustness and generates features with
+good class separation, but it differs significantly from the true
+This article has been accepted for publication in IEEE Transactions on Pattern Analysis and Machine Intelligence. This is the author's version which has not been fully edited and 
+content may change prior to final publication. Citation information: DOI 10.1109/TPAMI.2026.3728839
+© 2026 IEEE. All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies. Personal use is permitted,
+but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+Authorized licensed use limited to: XiangTan University. Downloaded on October 21,2026 at 02:50:31 UTC from IEEE Xplore.  Restrictions apply. 
+
+=== PAGE 13 ===
+13
+TABLE VI: Ablation study on the different diffusion time t and the SC type of DiffGen (Eq. 24).
+SC type t T
+ZSL GZSL
+AW A2 CUB SUN AW A2 CUB SUN
+T1 T1 T1 U S H U S H U S H
+Fake: ˜ru
+0
+1 4 88.9 87.7 79.2 76.5 88.0 81.8 80.7 84.0 82.3 71.0 61.3 65.8
+2 4 87.1 87.3 79.9 68.7 85.9 76.3 81.0 84.1 82.6 68.9 58.7 63.4
+3 4 81.4 87.6 75.4 62.4 87.0 72.7 82.0 81.8 81.9 64.9 58.1 61.3
+4 4 82.5 87.3 75.4 62.4 86.4 72.5 78.7 84.3 81.4 62.0 57.9 59.9
+Random 4 86.7 87.7 77.3 73.5 87.7 80.0 80.5 85.3 82.8 66.3 62.1 64.1
+Real: ru
+0
+1 4 91.0 87.7 79.5 88.6 93.9 91.2 84.2 86.1 85.1 78.3 63.3 70.0
+2 4 92.3 87.3 79.8 89.8 94.2 91.9 83.9 85.9 84.9 78.0 63.4 69.9
+3 4 92.1 87.6 80.0 88.8 94.1 91.4 85.1 84.6 84.9 78.6 63.9 70.5
+4 4 91.7 87.3 80.2 88.6 94.1 91.3 84.1 85.9 85.0 77.9 63.3 69.8
+Random 4 92.2 87.7 78.6 88.9 94.6 91.6 84.4 86.4 85.4 76.7 63.5 69.5
+learned from
+100% training set
+f-V AEGAN
+ZeroDiff
+ZeroDiff++
+learned from
+30% training set
+learned from
+10% training set
+Fig. 7: Qualitative evaluation with t-SNE visualization on
+AW A2. We randomly selected 100 generated samples per class
+and real samples for 10 unseen classes. We use different colors
+to denote classes, and use solid • and hollow ⋆ to denote
+the real and synthesized sample features, respectively (Best
+Viewed in Color).
+features. Finally, the features generated by our zerodiff++ are
+not only highly robust, achieving class separation with only
+10% training time, but also closely approximate the true feature
+distribution. This further highlights the role of DiffTTA (unseen
+class adaptation) and DiffGen (real-feature-based generation).
+2) Traceable Generation Path: We also visualize the gen-
+eration path of our DiffGen that connects each synthesized
+feature to a specific real test feature sample via diffusing the
+real feature at diffusion time t and denoising it partially. The
+traceability figure is Fig. 8, which means a smaller diffusion
+time t follows a denoising trajectory toward real features. It
+shows that darker colored points indicate longer diffusion
+times, a lower proportion of real features in the generated
+features, and a greater distance between the generated feature
+Fig. 8: The visualization for the traceable generation path of
+DiffGen on two unseen classes from AW A2. We use different
+colors to denote classes, and use ⋆ and • to denote the real and
+synthesized sample features, respectively. The lighter the color,
+the larger the diffusion step, resulting in a greater distance
+from the original features (Best Viewed in Color).
+points and the original feature points. This not only further
+verifies the partial feature imagination effectiveness of our
+DiffGen , i.e., injecting real features can effectively alleviate
+the mismatch between generated and real features, but also
+provides a traceable generation pattern, indicating that the
+generated points smoothly transition from clean to noise along
+the chain, thus facilitating error analysis and selective filtering.
+I. Pseudo Label Correction
+Like other pseudo-label-based TTA methods, our ZeroDiff++
+is also affected by the quality of pseudo-labels. However, the
+proposed ZeroDiff++ framework is orthogonal to existing
+pseudo-label refinement techniques [63], [64] and can be
+naturally integrated with them. For example, confidence-based
+sample selection can be easily incorporated by rejecting high-
+entropy predictions and adapting the generator using only
+low-entropy test samples. By combining the entropy-based
+sample rejection, the performance of our ZeroDiff++ can be
+further improved. These results not only further demonstrate
+the effectiveness of our ZeroDiff++, but also show that future
+researchers can explore ZSL research by designing better
+pseudo-labeling optimization strategies. The experiment and
+detailed discussion could be found in Appendix D.
+This article has been accepted for publication in IEEE Transactions on Pattern Analysis and Machine Intelligence. This is the author's version which has not been fully edited and 
+content may change prior to final publication. Citation information: DOI 10.1109/TPAMI.2026.3728839
+© 2026 IEEE. All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies. Personal use is permitted,
+but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+Authorized licensed use limited to: XiangTan University. Downloaded on October 21,2026 at 02:50:31 UTC from IEEE Xplore.  Restrictions apply. 
+
+=== PAGE 14 ===
+14
+Fig. 9: An illustration about the overlap mass under 1-D data.
+V. T HEORETICAL PERSPECTIVE
+A. Theory of Overlap Mass
+1) Overlap Mass Definition: Recall the forward diffusion
+process (Eq. 6 and 7). Due to the Markov property of the
+forward process, we have the marginal distribution of xt given
+the initial clean data x0:
+q(xt|x0) = N (xt;
+√
+¯αx0, (1 − ¯α)I), (25)
+where we denote αt := 1 − βt and ¯αt :=Qt
+t′=1 αt′.
+We can define the overlap mass as
+M(t) =
+Z
+min{pt(x), qt(x)} dx . (26)
+Intuitively, as shown in Fig. 9, we can use min{pt(x), qt(x)}
+represent the probability density of the point x being cov-
+ered by two distributions simultaneously, and integrate
+R
+dx
+accumulates the common coverage probability of each point
+to obtain the total overlap mass, which is the sum of the
+probabilities of the overlapping regions of the two distributions.
+If M(t) = 0 (i.e., two distributions are disjoint supports), the
+discriminator can perfectly separate the two distributions and
+relevant divergences (e.g., Jensen–Shannon Divergence, JSD)
+may saturate, causing generator gradients to vanish. In contrast,
+M(t) > 0 implies that there exist ambiguous or middle
+samples where both distributions place positive mass, and
+the discriminator cannot saturate everywhere. Prior works note
+that smoothing by noise produces such overlap and prevents
+JSD saturation [18], [65].
+2) Overlap Mass Under One-dimensional Case: To obtain
+an analytic expression for intuition, consider the 1D Dirac case
+where the two initial point masses lie at 0 and m (i.e., p0 = δ0
+and q0 = δm), respectively. After t steps of the diffusion
+defined above, these map to Gaussians
+pt(x) = N
+
+x; 0, σ 2 = 1 − ¯αt
+
+, (27)
+qt(x) = N
+
+x; √¯αtm, σ 2 = 1 − ¯αt
+
+. (28)
+The two density curves intersect at x = 1
+2
+√¯αtm. The overlap
+mass has the closed form
+M(t) =
+Z
+min{pt(x), qt(x)} dx
+= 2
+
+1 − Φ
+ |m|√¯αt
+2√1 − ¯αt
+
+(29)
+= 2Φ
+
+− |m|√¯αt
+2√1 − ¯αt
+
+= 2Φ
+
+− |m|√¯αt
+2σ
+
+,
+where Φ(·) denotes the standard normal Cumulative Distri-
+bution Function (CDF). This formula indicates that as the
+diffusion degree increases ( ¯αt → 0), the distributions become
+closer to each other and M(t) → 2Φ(0) = 1. When the noise
+is small ( ¯αt ≈ 1) or the initial separation |m| is large, the
+overlap M(t) is near zero, which corresponds to gradient
+saturation.
+3) Overlap mass in the multi-dimensional case: Now
+consider the case in Rd. Assume the two post-diffusion
+marginals are Gaussians with means µp, µq and common
+isotropic covariance (1 − ¯αt)I:
+pt = N (µp, (1 − ¯αt)I), q t = N (µq, (1 − ¯αt)I). (30)
+Let ∆µ = µp − µq. The Mahalanobis distance D squared
+between the means is
+D2 = ∆⊤
+µ
+
+(1 − ¯αt)I
+−1
+∆µ = ∥∆µ∥2
+1 − ¯αt
+. (31)
+We have the bound of overlap mass in the multi-dimensional
+case:
+M(t) ≥ 1
+2 exp
+
+− D2
+4
+
+= 1
+2 exp
+
+− ∥∆µ∥2
+4(1 − ¯αt)
+
+. (32)
+The detailed proof is provided in Appendix E.A.
+If the clean mean difference is ∆0, then the noised mean
+difference is ∆µ = √¯αt ∆0, giving
+D2 = ¯αt∥∆0∥2
+1 − ¯αt
+, (33)
+and therefore
+M(t) ≥ 1
+2 exp
+
+− ¯αt∥∆0∥2
+4(1 − ¯αt)
+
+. (34)
+This inequality highlights that increasing diffusion (reducing
+¯αt) reduces the effective Mahalanobis distance and increases
+the lower bound of overlap mass. In the limit t → T (so
+¯αt → 0), the overlap lower bound tends to a constant and the
+actual M(t) → 1.
+4) Implications for discriminator gradients: The overlap
+bounds above explain why diffusion-based discriminators
+stabilize GAN training. Whenever pt and qt overlap, the optimal
+discriminator at time t is D∗
+dif f = pt(x)
+pt(x)+qt(x) , which lies
+strictly between 0 and 1 on any point x where both densities
+are positive. Therefore, loss derivatives remain nonzero and
+provide meaningful feedback to the generator parameters.
+From the overlap-mass perspective developed above, at each
+diffusion step t, the real and fake marginals necessarily share
+support, so the discriminator loss is a smooth, well-behaved
+function of the generator. These overlap guarantees imply
+This article has been accepted for publication in IEEE Transactions on Pattern Analysis and Machine Intelligence. This is the author's version which has not been fully edited and 
+content may change prior to final publication. Citation information: DOI 10.1109/TPAMI.2026.3728839
+© 2026 IEEE. All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies. Personal use is permitted,
+but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+Authorized licensed use limited to: XiangTan University. Downloaded on October 21,2026 at 02:50:31 UTC from IEEE Xplore.  Restrictions apply. 
+
+=== PAGE 15 ===
+15
+that discriminator gradients do not vanish under diffusion-
+based smoothing, theoretically proving that diffusion-based
+discriminators are a remedy for disjoint-support failure modes
+in GAN training.
+B. Diffusion Marginalization
+In Sec. V-A1, we analyzed the overlap mass
+M(t) =
+Z
+min{pt(x), qt(x)} dx, (35)
+under simplified distributional assumptions, showing that the
+forward diffusion process increases distributional overlap. Here
+we provide a more general information-theoretic complement:
+the same diffusion marginalization contracts distribution dis-
+crepancy in the KL divergence, which supports the overlap-
+mass intuition beyond specific parametric forms.
+a) Common Diffusion Marginalization: Consider the
+forward diffusion process Eq. 6 and Eq. 7. By the Markov
+property, the marginal distribution admits a closed form
+q(vt|v0) = N
+
+vt; √¯αtv0, (1 − ¯αt)I
+
+. (36)
+Let p0 and q0 denote two probability measures over clean
+features v0 (e.g., real and generated clean feature distributions).
+We define their diffused marginals at step t by pushing forward
+through the same kernel q(vt|v0):
+pt(vt) :=
+Z
+q(vt|v0) p0(v0) dv0, (37)
+qt(vt) :=
+Z
+q(vt|v0) q0(v0) dv0. (38)
+Equivalently, if vt = √¯αtv0 + √1 − ¯αt ϵ with ϵ ∼ N (0, I),
+then pt and qt are the corresponding t-marginal laws.
+b) KL contraction under diffusion marginalization.: A
+fundamental result in [66]–[68] shows that marginalization
+along a common diffusion process is a contraction mapping
+for KL divergence. Specialized to the forward diffusion
+marginalization above, we have
+DKL(pt ∥ qt) ≤ DKL(p0 ∥ q0), ∀ t ≥ 0. (39)
+Moreover, in continuous-time diffusion formulations, the KL
+evolution admits a dissipation identity of the form [67]:
+d
+dt DKL(pt∥qt) = (40)
+− 1
+2 Evt∼pt
+h
+G2(t)
+
+
+∇vt log pt(vt) − ∇vt log qt(vt)
+
+
+2
+2
+i
+≤ 0,
+showing that the distributional discrepancy monotonically
+decreases along the diffusion trajectory.
+c) Connection to overlap mass: Overlap mass M(t)
+measures similarity from a geometric viewpoint, whereas the
+KL divergence quantifies discrepancy from an information-
+theoretic viewpoint. The contraction in (39) implies that the
+forward diffusion kernel in (36) progressively smooths both
+p0 and q0, removing sharp mismatches and reducing their
+information gap. Consequently, the diffused marginals pt
+and qt become increasingly entangled in support, which is
+consistent with the overlap-mass increase derived in Sec. V-A1.
+Importantly, unlike the Gaussian single-mode Assumptions
+used for closed-form overlap calculations, the KL contraction
+result holds under much milder regularity conditions.
+d) Implication for diffusion-augmented discrimination: In
+ZeroDiff++, discriminators compare real and generated features
+at multiple diffusion steps. Equations (39)–(40) indicate that
+larger diffusion steps correspond to regimes where distributional
+discrepancy is provably smaller, preventing discriminators from
+exploiting low-overlap artifacts in the clean feature space. Thus,
+diffusion augmentation stabilizes discriminative learning by
+enforcing alignment across progressively higher-overlap (lower-
+discrepancy) regimes, complementing and strengthening the
+overlap-mass analysis in Sec. V-A1.
+C. Theory of Overfitting Reducing
+1) Notation.: Now, we prove the reduction of discriminator
+overfitting caused by the diffusion process. We write PX :=
+L(X) for the probability measure of a random variable X and
+px is the probability density function of x (so px = dP/dx).
+For a measurable map T : Rd → Rd and measure P we write
+T#P for the pushforward of P by T . The Lipschitz semi-norm
+is denoted
+∥f ∥Lip := sup
+x̸=y
+|f(x) − f(y)|
+∥x − y∥ ,
+and we say that f is L-Lipschitz when ∥f ∥Lip ≤ L. We use
+the Euclidean norm ∥ · ∥ on Rd.
+2) Wasserstein Distance Contraction: Let Ptr, Pval denote
+the probability measures for the clean training set and the
+clean validation set, respectively. Assume they have finite first
+moments:
+R
+∥x∥ dP∗(x) < ∞. Fix a diffusion step t and write
+¯αt = Qt
+s=1(1 − βs) ∈ (0, 1]. Define the forward-diffused
+random variable xt = √¯αt x0 + √1 − ¯αt z and z ∼ N (0, I),
+where x0 is a clean sample. Denote by ν := N (0, (1 − ¯αt)I).
+The probability measures of the diffused data distribution are
+then
+Ptr,t := Ptr ∗ ν, P val,t := Pval ∗ ν,
+i.e. convolution of the clean laws with the same Gaussian
+kernel. We consider discriminator functions D : Rd → R that
+are approximately 1-Lipschitz since we use the WGAN-GP
+gradient penalty, which enforces a near-Lipschitz constraint. We
+assume discriminators are trained sufficiently on their respective
+training sets so that training error is negligible.
+Lemma V .1(Kantorovich–Rubinstein duality). For any proba-
+bility measures P, Q with finite first moments,
+W1(P, Q) = sup
+∥f ∥Lip≤1
+n
+EP [f] − EQ[f]
+o
+.
+Comment. This is the classical Kantorovich–Rubinstein duality.
+We use it to upper-bound expectation differences of any 1-
+Lipschitz function by W1.
+Theorem V .2(W-distance Contraction). Let S(x) := √¯αt x
+be the linear scaling map. Define P ′ := S#P and Q′ := S#Q
+This article has been accepted for publication in IEEE Transactions on Pattern Analysis and Machine Intelligence. This is the author's version which has not been fully edited and 
+content may change prior to final publication. Citation information: DOI 10.1109/TPAMI.2026.3728839
+© 2026 IEEE. All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies. Personal use is permitted,
+but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+Authorized licensed use limited to: XiangTan University. Downloaded on October 21,2026 at 02:50:31 UTC from IEEE Xplore.  Restrictions apply. 
+
+=== PAGE 16 ===
+16
+for any probability measures P, Q with finite first moments.
+Let ν = N (0, (1 − ¯αt)I). Then
+W1(P ∗ ν, Q ∗ ν) ≤ W1(P ′, Q′) = √¯αt W1(P, Q).
+Proof. The detailed proof is provided in Appendix E.B.
+In Theorem V .3, we treat the diffusion discriminator as
+operating on a lifted input space, and compare bounds under
+the assumption of comparable effective capacity and Lipschitz
+control.
+Theorem V .3 (Train-validation Generalization Error Con-
+traction). Let Dadv and Ddif f be the well-trained standard
+discriminator (trained on clean data) and the diffusion-based
+discriminator (trained on noisy data), respectively. Then, the
+validation generalization gaps satisfy
+Ex∼Ptr Dadv(x) − Ex∼Pval Dadv(x)
+ ≤ W1(Ptr, Pval),
+(41)
+and
+Ex∼Ptr,tDdif f(x) − Ex∼Pval,t Ddif f(x)
+
+≤ W1(Ptr,t, Pval,t)
+≤ √¯αt W1(Ptr, Pval). (42)
+That is, for ¯αt < 1, the diffusion-trained discriminator
+Ddif f has a strictly tighter upper bound on its validation
+generalization gap than Dadv.
+Proof. The first inequality (Eq. 41) follows directly from
+Lemma V .1 since Dadv is 1-Lipschitz:
+Ex∼Ptr Dadv(x) − Ex∼Pval Dadv(x)
+
+≤ sup
+∥f ∥Lip≤1
+{EPtr f − EPval f } = W1(Ptr, Pval). (43)
+Likewise, for Ddif f,
+Ex∼Ptr,tDdif f(x)−Ex∼Pval,t Ddif f(x)
+ ≤ W1(Ptr,t, Pval,t),
+and applying Theorem V .2 yields the stated contraction bound.
+This completes the proof.
+Remark V .4. From the theorem, we have:
+• Negligible Training Error Assumption. In practice,
+discriminators do not reach exact optima. If the dis-
+criminator leaves a residual training error εtrain (i.e. the
+empirical objective differs from its ideal by εtrain), then
+the validation error bounds above should be augmented
+by εtrain. Concretely, if the empirical training expectation
+differs from the population training expectation by at most
+εtrain, the validation bound for Ddif f becomes
+EPval,t[Ddif f] − EPtr,t[Ddif f]
+
+≤ √¯αt W1(Ptr, Pval) + εtrain. (44)
+• Effect of Gradient Penalty. WGAN-GP adds a penalty
+term of the form λE[(∥∇xD(˜x)∥ − 1)2] (with ˜x sampled
+on straight-line segments between real and fake samples)
+to encourage D to be near 1-Lipschitz on the data
+region. Strictly speaking, this enforces a local Lipschitz
+condition; in our theoretical statement, we assume the
+trained discriminator is approximately L-Lipschitz on the
+relevant support. If L ̸= 1 replace W1 by L W1 in the
+inequalities, and the contraction factor becomes L√¯αt.
+D. Discussion on practical assumptions.
+The above analysis relies on ideal Lipschitzness and neg-
+ligible training error. In Appendix D, we extend the theory
+to approximate Lipschitz discriminators with non-negligible
+training error and show that
+EPval,t[bDdif f] − EPtr,t[bDdif f]
+ ≤
+Lt
+√¯αt W1(Ptr,0, Pval,0) + 2εtrain,t, (45)
+where Lt is an effective Lipschitz constant and εtrain,t captures
+non-negligible training error. Thus, the diffusion-induced
+contraction remains valid up to a controllable residual term.
+Detailed derivations are provided in Appendix D.
+VI. C ONCLUSION
+In this paper, we investigate the zero-shot learning (ZSL)
+problem under varying amounts of training data, revealing that
+the issue of spurious visual-semantic correlations on both seen
+and unseen classes is exacerbated when training samples are
+scarce. To enhance visual-semantic correlation, we introduce
+ZeroDiff++, which incorporates three key components for
+generator training: (1) a diffusion forward chain to augment the
+limited training set; (2) SC-based representations to effectively
+represent each limited sample; (3) mutually learned discrimina-
+tors to validate generated features from multiple perspectives,
+including predefined semantics, contrastive representations,
+and diffusion processes; and two for feature generation: (4)
+diffusion-based test-time adaption that adapt generator on
+unseen classes by denoising pseudo-labeled test features; and
+(5) diffusion-based test-time generation allowing traceable
+generation and partial feature imagination via diffused test
+features. We also theoretically proved that diffusion-based
+discriminators have a better overfitting reduction effect than
+traditional clean-sample discriminators. Experiments conducted
+on three popular datasets demonstrate the data efficiency of
+our method. Our ZeroDiff++ significantly enhances zero-shot
+capacity, performing well with both abundant and limited
+training samples.
+ACKNOWLEDGMENTS
+This work was partially supported by the National Natural
+Science Foundation of China under Grant Nos. 62521007,
+62427819.
+REFERENCES
+[1] Z. Ye, S. N. Gowda, S. Chen, X. Huang, H. Xu, F. S. Khan, Y . Jin,
+K. Huang, and X. Jin, “Zerodiff: Solidified visual-semantic correlation
+in zero-shot learning,” in The Thirteenth International Conference on
+Learning Representations, 2025.
+This article has been accepted for publication in IEEE Transactions on Pattern Analysis and Machine Intelligence. This is the author's version which has not been fully edited and 
+content may change prior to final publication. Citation information: DOI 10.1109/TPAMI.2026.3728839
+© 2026 IEEE. All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies. Personal use is permitted,
+but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+Authorized licensed use limited to: XiangTan University. Downloaded on October 21,2026 at 02:50:31 UTC from IEEE Xplore.  Restrictions apply. 
+
+=== PAGE 17 ===
+17
+[2] Y . Xian, C. H. Lampert, B. Schiele, and Z. Akata, “Zero-shot learning—a
+comprehensive evaluation of the good, the bad and the ugly,” IEEE
+transactions on pattern analysis and machine intelligence , vol. 41, no. 9,
+pp. 2251–2265, 2018.
+[3] W.-L. Chao, S. Changpinyo, B. Gong, and F. Sha, “An empirical study
+and analysis of generalized zero-shot learning for object recognition in
+the wild,” in European conference on computer vision . Springer, 2016,
+pp. 52–68.
+[4] Y . Zhu, M. Elhoseiny, B. Liu, X. Peng, and A. Elgammal, “A generative
+adversarial approach for zero-shot learning from noisy texts,” in Proceed-
+ings of the IEEE conference on computer vision and pattern recognition ,
+2018, pp. 1004–1013.
+[5] Y .-H. Chen and M.-C. Yeh, “Text-enhanced attribute-based attention for
+generalized zero-shot fine-grained image classification,” in Proceedings
+of the 2021 International Conference on Multimedia Retrieval , 2021, pp.
+447–450.
+[6] Z. Fu, T. Xiang, E. Kodirov, and S. Gong, “Zero-shot learning on
+semantic class prototype graph,” IEEE transactions on pattern analysis
+and machine intelligence , vol. 40, no. 8, pp. 2009–2022, 2017.
+[7] N. Fei, Y . Gao, Z. Lu, and T. Xiang, “Z-score normalization, hubness,
+and few-shot learning,” in Proceedings of the IEEE/CVF International
+Conference on Computer Vision (ICCV) , October 2021, pp. 142–151.
+[8] Z. Zhang and V . Saligrama, “Zero-shot learning via semantic similarity
+embedding,” in Proceedings of the IEEE International Conference on
+Computer Vision (ICCV) , December 2015.
+[9] Z. Han, Z. Fu, S. Chen, and J. Yang, “Contrastive embedding for
+generalized zero-shot learning,” in Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition , 2021, pp.
+2371–2381.
+[10] S. N. Gowda, “Synthetic sample selection for generalized zero-shot
+learning,” in Proceedings of the IEEE/CVF conference on computer
+vision and pattern recognition , 2023, pp. 58–67.
+[11] W. Hou, S. Chen, S. Chen, Z. Hong, Y . Wang, X. Feng, S. Khan,
+F. S. Khan, and X. You, “Visual-augmented dynamic semantic prototype
+for generative zero-shot learning,” in Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition (CVPR) , June
+2024, pp. 23 627–23 637.
+[12] V . K. Verma, D. Brahma, and P. Rai, “Meta-learning for generalized
+zero-shot learning,” in Proceedings of the AAAI conference on artificial
+intelligence, vol. 34, no. 04, 2020, pp. 6062–6069.
+[13] B. Tang, J. Zhang, L. Yan, Q. Yu, L. Sheng, and D. Xu, “Data-free
+generalized zero-shot learning,” in Proceedings of the AAAI Conference
+on Artificial Intelligence , vol. 38, no. 6, 2024, pp. 5108–5117.
+[14] J. Song, C. Meng, and S. Ermon, “Denoising diffusion implicit models,”
+in International Conference on Learning Representations , 2020.
+[15] Z. Wang, Y . Jiang, H. Zheng, P. Wang, P. He, Z. A. Wang, W. Chen,
+and M. Zhou, “Patch diffusion: Faster and more data-efficient training
+of diffusion models,” in Advances in Neural Information Processing
+Systems, vol. 36, 2023, pp. 72 137–72 154.
+[16] P. Khosla, P. Teterwak, C. Wang, A. Sarna, Y . Tian, P. Isola, A. Maschinot,
+C. Liu, and D. Krishnan, “Supervised contrastive learning,” Advances in
+neural information processing systems , vol. 33, pp. 18 661–18 673, 2020.
+[17] Z. Xiao, K. Kreis, and A. Vahdat, “Tackling the generative learning
+trilemma with denoising diffusion GANs,” in International Conference
+on Learning Representations , 2022.
+[18] Z. Wang, H. Zheng, P. He, W. Chen, and M. Zhou, “Diffusion-gan:
+Training gans with diffusion,” arXiv preprint arXiv:2206.02262 , 2022.
+[19] A. C. Li, M. Prabhudesai, S. Duggal, E. Brown, and D. Pathak, “Your
+diffusion model is secretly a zero-shot classifier,” in Proceedings of
+the IEEE/CVF International Conference on Computer Vision , 2023, pp.
+2206–2217.
+[20] Z. Akata, S. Reed, D. Walter, H. Lee, and B. Schiele, “Evaluation of
+output embeddings for fine-grained image classification,” in Proceedings
+of the IEEE conference on computer vision and pattern recognition ,
+2015, pp. 2927–2936.
+[21] Y . Yang, Y . Luo, W. Chen, F. Shen, J. Shao, and H. T. Shen, “Zero-shot
+hashing via transferring supervised knowledge,” in Proceedings of the
+24th ACM international conference on Multimedia , 2016, pp. 1286–1295.
+[22] Z. Ding, M. Shao, and Y . Fu, “Low-rank embedded ensemble semantic
+dictionary for zero-shot learning,” in Proceedings of the IEEE conference
+on computer vision and pattern recognition , 2017, pp. 2050–2058.
+[23] S. Chen, Z. Hong, Y . Liu, G.-s. Xie, B. Sun, H. Li, Q. Peng, K. Lu, and
+X. You, “Transzero: Attribute-guided transformer for zero-shot learning,”
+in AAAI, 2022.
+[24] Z. Ye, G. Yang, X. Jin, Y . Liu, and K. Huang, “Rebalanced zero-shot
+learning,” IEEE Transactions on Image Processing , 2023.
+[25] S. Chen, Z. Hong, W. Hou, G.-S. Xie, Y . Song, J. Zhao, X. You, S. Yan,
+and L. Shao, “Transzero++: Cross attribute-guided transformer for zero-
+shot learning,” IEEE transactions on pattern analysis and machine
+intelligence, 2022.
+[26] M. Arjovsky, S. Chintala, and L. Bottou, “Wasserstein generative adver-
+sarial networks,” in Proceedings of the 34th International Conference
+on Machine Learning , ser. Proceedings of Machine Learning Research,
+D. Precup and Y . W. Teh, Eds., vol. 70. PMLR, 2017, pp. 214–223.
+[27] Z. Ye, F. Hu, F. Lyu, L. Li, and K. Huang, “Disentangling semantic-
+to-visual confusion for zero-shot learning,” IEEE Transactions on
+Multimedia, 2021.
+[28] S. Chen, D. Fu, S. Chen, W. Hou, X. You et al., “Causal visual-semantic
+correlation for zero-shot learning,” in ACM Multimedia 2024 , 2024.
+[29] Y . Xian, S. Sharma, B. Schiele, and Z. Akata, “f-vaegan-d2: A feature
+generating framework for any-shot learning,” in Proceedings of the
+IEEE/CVF conference on computer vision and pattern recognition , 2019,
+pp. 10 275–10 284.
+[30] S. Narayan, A. Gupta, F. S. Khan, C. G. Snoek, and L. Shao, “Latent em-
+bedding feedback and discriminative features for zero-shot classification,”
+in Computer Vision–ECCV 2020: 16th European Conference, Glasgow,
+UK, August 23–28, 2020, Proceedings, Part XXII 16 . Springer, 2020,
+pp. 479–495.
+[31] Z. Wang, Y . Hao, T. Mu, O. Li, S. Wang, and X. He, “Bi-directional dis-
+tribution alignment for transductive zero-shot learning,” in Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern Recognition ,
+2023, pp. 19 893–19 902.
+[32] Y . Luo and Z. Yang, “Dyngan: Solving mode collapse in gans with
+dynamic clustering,” IEEE Transactions on Pattern Analysis and Machine
+Intelligence, 2024.
+[33] J. Ho, A. Jain, and P. Abbeel, “Denoising diffusion probabilistic models,”
+Advances in Neural Information Processing Systems , vol. 33, pp. 6840–
+6851, 2020.
+[34] S. Chen, W. Hou, Z. Hong, X. Ding, Y . Song, X. You, T. Liu, and
+K. Zhang, “Evolving semantic prototype improves generative zero-
+shot learning,” in Proceedings of the 40th International Conference
+on Machine Learning , ser. Proceedings of Machine Learning Research,
+vol. 202. PMLR, 23–29 Jul 2023, pp. 4611–4622.
+[35] A. Islam, C.-F. R. Chen, R. Panda, L. Karlinsky, R. Radke, and R. Feris,
+“A broad study on the transferability of visual representations with
+contrastive learning,” in Proceedings of the IEEE/CVF International
+Conference on Computer Vision , 2021, pp. 8845–8855.
+[36] K. Clark and P. Jaini, “Text-to-image diffusion models are zero shot
+classifiers,” Advances in Neural Information Processing Systems , vol. 36,
+2024.
+[37] R. Rombach, A. Blattmann, D. Lorenz, P. Esser, and B. Ommer, “High-
+resolution image synthesis with latent diffusion models,” in Proceedings
+of the IEEE/CVF conference on computer vision and pattern recognition ,
+2022, pp. 10 684–10 695.
+[38] S. Schneider, E. Rusak, L. Eck, O. Bringmann, W. Brendel, and
+M. Bethge, “Improving robustness against common corruptions by
+covariate shift adaptation,” Advances in neural information processing
+systems, vol. 33, pp. 11 539–11 551, 2020.
+[39] D. Wang, E. Shelhamer, S. Liu, B. Olshausen, and T. Darrell, “Tent:
+Fully test-time adaptation by entropy minimization,” arXiv preprint
+arXiv:2006.10726, 2020.
+[40] D.-H. Lee et al., “Pseudo-label: The simple and efficient semi-supervised
+learning method for deep neural networks,” in Workshop on challenges
+in representation learning, ICML , vol. 3, no. 2. Atlanta, 2013, p. 896.
+[41] M. Boudiaf, R. Mueller, I. Ben Ayed, and L. Bertinetto, “Parameter-free
+online test-time adaptation,” in Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition , 2022, pp. 8344–8353.
+[42] M. Shu, W. Nie, D.-A. Huang, Z. Yu, T. Goldstein, A. Anandkumar,
+and C. Xiao, “Test-time prompt tuning for zero-shot generalization in
+vision-language models,” Advances in Neural Information Processing
+Systems, vol. 35, pp. 14 274–14 289, 2022.
+[43] C.-M. Feng, K. Yu, Y . Liu, S. Khan, and W. Zuo, “Diverse data
+augmentation with diffusions for effective test-time prompt tuning,” in
+Proceedings of the IEEE/CVF International Conference on Computer
+Vision, 2023, pp. 2704–2714.
+[44] Y . Xian, T. Lorenz, B. Schiele, and Z. Akata, “Feature generating
+networks for zero-shot learning,” in Proceedings of the IEEE conference
+on computer vision and pattern recognition , 2018, pp. 5542–5551.
+[45] I. Gulrajani, F. Ahmed, M. Arjovsky, V . Dumoulin, and A. C. Courville,
+“Improved training of wasserstein gans,” Advances in neural information
+processing systems, vol. 30, 2017.
+[46] P. Welinder, S. Branson, T. Mita, C. Wah, F. Schroff, S. Belongie, and
+P. Perona, “Caltech-ucsd birds 200,” 2010.
+This article has been accepted for publication in IEEE Transactions on Pattern Analysis and Machine Intelligence. This is the author's version which has not been fully edited and 
+content may change prior to final publication. Citation information: DOI 10.1109/TPAMI.2026.3728839
+© 2026 IEEE. All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies. Personal use is permitted,
+but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+Authorized licensed use limited to: XiangTan University. Downloaded on October 21,2026 at 02:50:31 UTC from IEEE Xplore.  Restrictions apply. 
+
+=== PAGE 18 ===
+18
+[47] G. Patterson and J. Hays, “Sun attribute database: Discovering, annotating,
+and recognizing scene attributes,” in 2012 IEEE Conference on Computer
+Vision and Pattern Recognition . IEEE, 2012, pp. 2751–2758.
+[48] K. He, X. Zhang, S. Ren, and J. Sun, “Deep residual learning for image
+recognition,” in Proceedings of the IEEE conference on computer vision
+and pattern recognition , 2016, pp. 770–778.
+[49] J. Deng, W. Dong, R. Socher, L.-J. Li, K. Li, and L. Fei-Fei, “Imagenet:
+A large-scale hierarchical image database,” in 2009 IEEE conference on
+computer vision and pattern recognition . Ieee, 2009, pp. 248–255.
+[50] J. Cui, Z. Zhong, S. Liu, B. Yu, and J. Jia, “Parametric contrastive
+learning,” in Proceedings of the IEEE/CVF international conference on
+computer vision, 2021, pp. 715–724.
+[51] S. Reed, Z. Akata, H. Lee, and B. Schiele, “Learning deep representa-
+tions of fine-grained visual descriptions,” in Proceedings of the IEEE
+conference on computer vision and pattern recognition , 2016, pp. 49–58.
+[52] Y . Song, J. Sohl-Dickstein, D. P. Kingma, A. Kumar, S. Ermon, and
+B. Poole, “Score-based generative modeling through stochastic differential
+equations,” arXiv preprint arXiv:2011.13456 , 2020.
+[53] Z. Chen, Y . Luo, R. Qiu, S. Wang, Z. Huang, J. Li, and Z. Zhang, “Se-
+mantics disentangling for generalized zero-shot learning,” in Proceedings
+of the IEEE/CVF international conference on computer vision , 2021, pp.
+8712–8720.
+[54] C. Zhang, M. Jin, Q. Yu, H. Xue, S. N. Gowda, and X. Jin, “Bridging
+the projection gap: Overcoming projection bias through parameterized
+distance learning,” in Proceedings of the Asian Conference on Computer
+Vision, 2024, pp. 3327–3343.
+[55] H. Su, J. Li, K. Lu, L. Zhu, and H. T. Shen, “Dual-aligned feature con-
+fusion alleviation for generalized zero-shot learning,” IEEE Transactions
+on Circuits and Systems for Video Technology , 2023.
+[56] W. Xu, Y . Xian, J. Wang, B. Schiele, and Z. Akata, “Attribute prototype
+network for zero-shot learning,” in NeurIPS, 2020.
+[57] M. Liu, F. Li, C. Zhang, Y . Wei, H. Bai, and Y . Zhao, “Progressive
+semantic-visual mutual adaption for generalized zero-shot learning,” in
+Proceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition, 2023, pp. 15 337–15 346.
+[58] S. Chen, W. Hou, S. Khan, and F. S. Khan, “Progressive semantic-
+guided vision transformer for zero-shot learning,” in Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition ,
+2024, pp. 23 964–23 974.
+[59] M. Liu, H. Bai, F. Li, C. Zhang, Y . Wei, M. Wang, T.-S. Chua,
+and Y . Zhao, “Psvma+: exploring multi-granularity semantic-visual
+adaption for generalized zero-shot learning,” IEEE Transactions on
+Pattern Analysis and Machine Intelligence , 2024.
+[60] A. Radford, J. W. Kim, C. Hallacy, A. Ramesh, G. Goh, S. Agarwal,
+G. Sastry, A. Askell, P. Mishkin, J. Clark et al., “Learning transferable
+visual models from natural language supervision,” in International
+conference on machine learning . PMLR, 2021, pp. 8748–8763.
+[61] K. Zhou, J. Yang, C. C. Loy, and Z. Liu, “Learning to prompt for vision-
+language models,” International Journal of Computer Vision , vol. 130,
+no. 9, pp. 2337–2348, 2022.
+[62] H. Chen, Y . Liu, Y . Ma, N. Zheng, and X. Yu, “Tpr: Topology-
+preserving reservoirs for generalized zero-shot learning,” Advances in
+Neural Information Processing Systems , vol. 37, pp. 102 229–102 254,
+2024.
+[63] S. Zhao, M. Gong, T. Liu, H. Fu, and D. Tao, “Domain generalization
+via entropy regularization,” Advances in neural information processing
+systems, vol. 33, pp. 16 096–16 107, 2020.
+[64] D. Zhao, Q. Zang, N. Pu, S. Wang, N. Sebe, and Z. Zhong, “Secov2:
+Semantic connectivity-driven pseudo-labeling for robust cross-domain
+semantic segmentation,” IEEE Transactions on Pattern Analysis and
+Machine Intelligence, 2025.
+[65] M. Arjovsky and L. Bottou, “Towards principled methods for training
+generative adversarial networks,” arXiv preprint arXiv:1701.04862, 2017.
+[66] M. Raginsky, “Strong data processing inequalities and phi-sobolev
+inequalities for discrete channels,” IEEE Transactions on Information
+Theory, vol. 62, no. 6, pp. 3355–3389, 2016.
+[67] W. Luo, H. Jiang, T. Hu, J. Sun, Z. Li, and Z. Zhang, “Training energy-
+based models with diffusion contrastive divergences,” arXiv preprint
+arXiv:2307.01668, 2023.
+[68] Y . Wang, W. Bai, C. Zhang, D. Zhang, W. Luo, and H. Sun, “Uni-
+instruct: One-step diffusion model through unified diffusion divergence
+instruction,” arXiv preprint arXiv:2505.20755 , 2025.
+VII. B IOGRAPHY SECTION
+Zihan Ye is currently a post-doc at the University of
+Chinese Academy of Sciences (UCAS). He received
+the Ph.D. degree from the University of Liverpool,
+UK, in 2025. His research results have been presented
+in prominent conferences and prestigious journals,
+such as ICLR, ICML, ICME, BMVC, ICIP, AAAI,
+IEEE TRANSACTIONS ON IMAGE PROCESSING,
+IEEE TRANSACTIONS ON MULTIMEDIA, and
+PATTERN COGNITION. His current research in-
+terests span computer vision and machine learning
+with a series of topics, such as zero-shot learning,
+generative modeling and learning, and visual-language learning.
+Shreyank N Gowda is an Assistant Professor at the
+University of Nottingham and a CoSeC Fellow. He
+received his PhD from the University of Edinburgh
+in 2023. He was a postdoctoral researcher at the
+University of Oxford between 2023 to 2024. He
+is a researcher specializing in deployable computer
+vision research with a focus on data-efficient and
+memory-efficient learning methodologies, across di-
+verse datasets such as images, videos, and medical
+data, strongly motivated by how we as humans see
+and learn. His work has been published in top AI and
+Vision conferences such as AAAI, ICLR, ICCV , ECCV , CVPR, BMVC,and
+MICCAI.
+Kaile Du (Student Member, IEEE) is working toward
+a PhD degree in the College of Automation, Southeast
+University, China. He has published several academic
+papers in international journals and conferences,
+such as IEEE TRANSACTIONS ON MULTIMEDIA,
+IEEE TRANSACTIONS ON GEOSCIENCE AND
+REMOTE SENSING, Mathematics, ECCV , AAAI,
+and ICME, etc. His research interests include class-
+incremental learning, multi-label learning, graph
+representation learning, etc.
+Weijian Luo is a RedStar Senior Research Scientist
+at the Humane Intelligence (hi) Lab, Xiaohongshu
+Inc. He received his B.S. degree from the University
+of Science and Technology of China and his M.S. and
+Ph.D. degrees in statistics and generative modeling
+from Peking University. His research focuses on
+building generic AGI systems. He has published more
+than 15 academic papers in international journals and
+conferences, such as IEEE TPAMI, Transactions on
+Machine Learning Research, NeurIPS, ICML, ICLR,
+CVPR, etc. Weijian is now invited as a reviewer for
+Natural Communications, TPAMI, TIP, TNNLS, Journal of Machine Learning
+Research, NeurIPS, ICML, ICLR, CVPR, etc.
+Ling Shao (Fellow, IEEE) is a Distinguished Pro-
+fessor with the University of Chinese Academy of
+Sciences, Beijing, China. He was the founder of the
+Inception Institute of Artificial Intelligence (IIAI)
+and the Mohamed bin Zayed University of Artificial
+Intelligence (MBZUAI), Abu Dhabi, UAE. His re-
+search interests include physical AI, multimodal AI,
+and AI for healthcare. He is a fellow of the IEEE,
+the IAPR, the BCS and the IET.
+This article has been accepted for publication in IEEE Transactions on Pattern Analysis and Machine Intelligence. This is the author's version which has not been fully edited and 
+content may change prior to final publication. Citation information: DOI 10.1109/TPAMI.2026.3728839
+© 2026 IEEE. All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies. Personal use is permitted,
+but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+Authorized licensed use limited to: XiangTan University. Downloaded on October 21,2026 at 02:50:31 UTC from IEEE Xplore.  Restrictions apply. 

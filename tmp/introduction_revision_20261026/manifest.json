@@ -1,0 +1,42 @@
+{
+  "source_docx": "D:\\.湘潭大学学习文档\\小论文\\初稿-中文.docx",
+  "source_outline": "D:\\.湘潭大学学习文档\\小论文\\大纲.md",
+  "source_docx_sha256": "1a6b9f0d894df89c11237537308f4f5b29c6edbebe8da171501b6f31ede7738f",
+  "source_outline_sha256": "f0e416703ad24acf8db18d99d8c1e81b098590d63ccc65818feffdb9f5679b75",
+  "output_docx": "D:\\GitCode\\Rediff\\tmp\\introduction_revision_20261026\\初稿-中文.docx",
+  "output_outline": "D:\\GitCode\\Rediff\\tmp\\introduction_revision_20261026\\大纲.md",
+  "output_docx_sha256": "41a0a82e16b7ea6dace5d542cb73d3a58fe6e730298d9f88069eeef75b2bcb4b",
+  "output_outline_sha256": "0c119f6d4f8748528769b59064ae40bda33ae0ccdb0de068d9bc0adb3abcfaa3",
+  "intro_paragraphs": 6,
+  "contribution_paragraphs": 3,
+  "intro_characters": 1470,
+  "removed_figure": "word/media/image1.png",
+  "remaining_figure_renumbering_paragraphs": [
+    90,
+    92,
+    94
+  ],
+  "preserved_comments": [
+    "3",
+    "4"
+  ],
+  "method_formula_memo_preserved": true,
+  "published": true,
+  "visual_qa": {
+    "pages": 11,
+    "renderer": "Native Word export with packaged render_docx.py rasterization",
+    "reviewed_pages": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ]
+  }
+}

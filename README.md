@@ -76,6 +76,12 @@ Then
 python ./scripts/run_awa2_zerodiff_DFG_train.py
 ```
 
+## Class relation diagnostic
+
+Rediff can measure unseen-class ordering reversals against the fixed ZeroDiff references.
+See [the server commands and acceptance checks](docs/RELATION_DIAGNOSTIC.md) for AWA2, CUB and SUN.
+The diagnostic uses frozen DRG/DFG inference in the original visual feature space and requires no retraining.
+
 ## Results
 Following table shows the results of our released models using various evaluation protocols on three datasets, both in the ZSL and GZSL settings:
 
